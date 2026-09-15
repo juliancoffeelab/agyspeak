@@ -13,6 +13,13 @@ from agyspeak import tts
 server = MCPServer("agyspeak")
 
 
+def _reason(exc: Exception) -> str:
+    text = str(exc)
+    if any(k in text for k in ("404", "Entry Not Found", "local cache")):
+        return "unknown voice"
+    return text.splitlines()[0] if text else type(exc).__name__
+
+
 @server.tool()
 def speak(
     text: str,
@@ -34,6 +41,7 @@ def speak(
         text: The exact text to speak. Keep it short, a phrase or a sentence or two.
         voice: Kokoro voice id. Prefix a=American, b=British; then f=female,
             m=male. Good ones: af_heart, af_bella, am_michael, bf_emma, bm_george.
+            Blend two with "+", e.g. "af_heart+bf_emma" for a mid-Atlantic mix.
             Ignored when engine is "say" unless it names a macOS voice.
         speed: Playback speed multiplier, 0.5 (slow, for learners) to 1.5.
         engine: "kokoro" (default, natural) or "say" (macOS built-in, instant).
@@ -47,10 +55,31 @@ def speak(
         tts.play(path)
         return f"spoke {len(text.split())} words with kokoro/{voice} ({path.name})"
     except Exception as exc:  # report to the model instead of crashing the server
-        reason = str(exc).splitlines()[0] if str(exc) else type(exc).__name__
-        if "404" in reason or "Entry Not Found" in str(exc):
-            reason = f"unknown voice {voice!r}"
-        return f"speak failed ({engine}/{voice}): {reason}"
+        return f"speak failed ({engine}/{voice}): {_reason(exc)}"
+
+
+@server.tool()
+def narrate(lines: list[dict], pause: float = 0.4) -> str:
+    """Read a multi-voice script aloud as one continuous performance.
+
+    Use this instead of repeated speak() calls whenever the user asks for a
+    story, dialogue, or anything with more than one speaker or line: it renders
+    every line up front and plays them back to back with no gaps. Same rule as
+    speak: only when the user explicitly asks to hear it.
+
+    Args:
+        lines: Ordered segments, each {"text": str, "voice": str, "speed": float}.
+            voice and speed are optional and follow the speak() conventions;
+            reuse the same voice id for the same character.
+        pause: Silence between lines in seconds.
+    """
+    try:
+        path = tts.kokoro_narrate(lines, pause=pause)
+        tts.play(path)
+        voices = sorted({str(l.get("voice") or tts.DEFAULT_KOKORO_VOICE) for l in lines})
+        return f"narrated {len(lines)} lines with voices {', '.join(voices)} ({path.name})"
+    except Exception as exc:
+        return f"narrate failed: {_reason(exc)}"
 
 
 def main() -> None:

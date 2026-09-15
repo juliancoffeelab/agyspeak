@@ -74,7 +74,13 @@ TTS model that runs on CPU/MPS, and plays the result with `afplay`. Pass
 `engine="say"` for the instant macOS voice instead. Once registered, Gemini calls
 it when you ask to hear something ("say that", "read it back"), and stays quiet
 otherwise. Kokoro has no emotion control; intonation comes from punctuation,
-voice choice (a/b = American/British, f/m = female/male) and `speed`.
+voice choice (a/b = American/British, f/m = female/male) and `speed`. Two voices
+can be blended with `+`, e.g. `af_heart+bf_emma`.
+
+A second tool, `narrate(lines=[{text, voice, speed}, ...], pause=0.4)`, renders a
+whole multi-speaker script into one clip and plays it without gaps. Gemini uses it
+for stories and dialogues; it also costs one tool round-trip instead of one per
+line, which matters because every round-trip resends the full conversation.
 
 Kokoro needs `espeak-ng` for words outside its dictionary (`brew install
 espeak-ng`). The model (~330 MB) downloads from Hugging Face on first use into
@@ -88,7 +94,7 @@ Headless `agy` cannot prompt for permission, so allow that one tool in
 `~/.gemini/antigravity-cli/settings.json`:
 
 ```json
-{ "permissions": { "allow": ["mcp(agyspeak/speak)"] } }
+{ "permissions": { "allow": ["mcp(agyspeak/speak)", "mcp(agyspeak/narrate)"] } }
 ```
 
 Note that `agy mcp add` is global, so the tool is visible to every agy session.
