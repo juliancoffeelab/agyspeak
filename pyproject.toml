@@ -7,6 +7,7 @@ requires-python = ">=3.14"
 dependencies = [
     "kokoro>=0.9.4",
     "mcp>=2.2.0",
+    "mlx-audio>=0.5.4",
     "numpy>=2.5.3",
     "prompt-toolkit>=3.0.53",
     "rich>=15.0.0",

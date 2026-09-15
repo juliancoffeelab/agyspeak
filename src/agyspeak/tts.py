@@ -19,6 +19,11 @@ KOKORO_RATE = 24_000
 DEFAULT_KOKORO_VOICE = "af_heart"
 DEFAULT_SAY_VOICE = "Samantha"
 
+# Qwen3-TTS via mlx-audio (Apple Silicon). 0.6B 8-bit fits alongside Kokoro in 8 GB RAM.
+QWEN_REPO = "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit"
+QWEN_SPEAKERS = ("Vivian", "Serena", "Uncle_Fu", "Dylan", "Eric", "Ryan", "Aiden", "Ono_Anna", "Sohee")
+DEFAULT_QWEN_SPEAKER = "Ryan"
+
 # Kokoro voice prefixes: a=American, b=British English; then f/m for gender.
 KOKORO_LANGS = {"a": "American English", "b": "British English"}
 
@@ -26,25 +31,25 @@ _pipelines: dict[str, object] = {}
 _lock = threading.Lock()
 
 
-def _prefer_cache() -> None:
-    """Skip Hub round-trips once the model is cached; downloads still work otherwise.
+def _snapshot(repo: str) -> Path:
+    """Local directory for a Hub repo: cached copy if complete, else download."""
+    from huggingface_hub import snapshot_download
 
-    Must run before huggingface_hub is imported: it reads HF_HUB_OFFLINE at import.
-    """
-    hub = Path(os.environ.get("HF_HUB_CACHE") or Path(os.environ.get("HF_HOME") or Path.home() / ".cache" / "huggingface") / "hub")
-    snapshots = hub / f"models--{KOKORO_REPO.replace('/', '--')}" / "snapshots"
-    if any(snapshots.glob("*/kokoro-v1_0.pth")):
-        os.environ.setdefault("HF_HUB_OFFLINE", "1")
+    try:
+        return Path(snapshot_download(repo, local_files_only=True))
+    except Exception:
+        return Path(snapshot_download(repo))
 
 
 def _pipeline(lang_code: str):
     with _lock:
         if lang_code not in _pipelines:
-            _prefer_cache()
             logging.getLogger("httpx").setLevel(logging.WARNING)
-            from kokoro import KPipeline  # slow import, keep it lazy
+            from kokoro import KModel, KPipeline  # slow import, keep it lazy
 
-            _pipelines[lang_code] = KPipeline(lang_code=lang_code, repo_id=KOKORO_REPO)
+            snap = _snapshot(KOKORO_REPO)
+            model = KModel(config=str(snap / "config.json"), model=str(snap / "kokoro-v1_0.pth"))
+            _pipelines[lang_code] = KPipeline(lang_code=lang_code, model=model, repo_id=KOKORO_REPO)
         return _pipelines[lang_code]
 
 
@@ -53,22 +58,23 @@ def warm_up(lang_code: str = "a") -> None:
     threading.Thread(target=_pipeline, args=(lang_code,), daemon=True).start()
 
 
-def _voice(pipe, voice: str):
-    """Resolve a voice id, or an even blend like "af_heart+bf_emma"."""
-    names = [v.strip() for v in voice.split("+") if v.strip()]
-    if len(names) <= 1:
-        return voice
-    import torch
-
-    packs = [pipe.load_voice(n) for n in names]
-    return torch.stack(packs).mean(dim=0)
+def _voice(voice: str) -> str:
+    """Resolve a voice id, or a blend like "af_heart+bf_emma", to local voice files."""
+    voices_dir = _snapshot(KOKORO_REPO) / "voices"
+    paths = []
+    for name in (v.strip() for v in voice.split("+")):
+        path = voices_dir / f"{name}.pt"
+        if not path.exists():
+            raise ValueError(f"unknown voice {name!r}")
+        paths.append(str(path))
+    return ",".join(paths)
 
 
 def kokoro_render(text: str, voice: str = DEFAULT_KOKORO_VOICE, speed: float = 1.0) -> np.ndarray:
     """Synthesize text and return float32 samples at KOKORO_RATE."""
     lang_code = voice[0] if voice[:1] in KOKORO_LANGS else "a"
     pipe = _pipeline(lang_code)
-    chunks = [np.asarray(audio) for _, _, audio in pipe(text, voice=_voice(pipe, voice), speed=speed)]
+    chunks = [np.asarray(audio) for _, _, audio in pipe(text, voice=_voice(voice), speed=speed)]
     if not chunks:
         raise RuntimeError("kokoro produced no audio")
     return np.concatenate(chunks)
@@ -87,11 +93,20 @@ def kokoro_synth(text: str, voice: str = DEFAULT_KOKORO_VOICE, speed: float = 1.
 
 
 def _render_line(line: dict) -> np.ndarray:
-    return kokoro_render(
-        line["text"],
-        line.get("voice") or DEFAULT_KOKORO_VOICE,
-        float(line.get("speed") or 1.0),
-    )
+    """Render one script line; everything is normalised to KOKORO_RATE."""
+    voice = line.get("voice") or DEFAULT_KOKORO_VOICE
+    engine = line.get("engine") or ("qwen" if voice in QWEN_SPEAKERS else "kokoro")
+    if engine == "qwen":
+        audio, rate = qwen_render(
+            line["text"],
+            speaker=voice if voice in QWEN_SPEAKERS else DEFAULT_QWEN_SPEAKER,
+            instruct=line.get("instruct"),
+            language=line.get("language") or "auto",
+        )
+        audio = resample(audio, rate, KOKORO_RATE)
+        speed = float(line.get("speed") or 1.0)
+        return audio if speed == 1.0 else resample(audio, int(KOKORO_RATE * speed), KOKORO_RATE)
+    return kokoro_render(line["text"], voice, float(line.get("speed") or 1.0))
 
 
 def kokoro_narrate(lines: list[dict], pause: float = 0.4) -> Path:
@@ -160,6 +175,52 @@ def _limit_render_threads() -> None:
     import torch
 
     torch.set_num_threads(max(1, (os.cpu_count() or 2) - 2))
+
+
+_qwen_models: dict[str, object] = {}
+
+
+def _qwen(repo: str = QWEN_REPO):
+    with _lock:
+        if repo not in _qwen_models:
+            from mlx_audio.tts.utils import load_model  # slow import, keep it lazy
+
+            _qwen_models[repo] = load_model(str(_snapshot(repo)))
+        return _qwen_models[repo]
+
+
+def qwen_render(
+    text: str,
+    speaker: str = DEFAULT_QWEN_SPEAKER,
+    instruct: str | None = None,
+    language: str = "auto",
+    repo: str = QWEN_REPO,
+) -> tuple[np.ndarray, int]:
+    """Synthesize with Qwen3-TTS; returns (float32 samples, sample rate).
+
+    `instruct` is a free-text style direction ("whispering, conspiratorial",
+    "barely holding back laughter"), which is the thing Kokoro cannot do.
+    """
+    model = _qwen(repo)
+    rate = KOKORO_RATE
+    chunks: list[np.ndarray] = []
+    for result in model.generate_custom_voice(
+        text, speaker=speaker, language=language, instruct=instruct or None
+    ):
+        chunks.append(np.asarray(result.audio, dtype=np.float32))
+        rate = int(getattr(result, "sample_rate", rate) or rate)
+    if not chunks:
+        raise RuntimeError("qwen produced no audio")
+    return np.concatenate(chunks), rate
+
+
+def resample(audio: np.ndarray, src: int, dst: int) -> np.ndarray:
+    if src == dst:
+        return audio
+    n = int(round(len(audio) * dst / src))
+    x_old = np.linspace(0.0, 1.0, num=len(audio), endpoint=False)
+    x_new = np.linspace(0.0, 1.0, num=n, endpoint=False)
+    return np.interp(x_new, x_old, audio).astype(np.float32)
 
 
 def play(path: Path) -> None:

@@ -84,6 +84,14 @@ and dialogues; it also costs one tool round-trip instead of one per line, which
 matters because every round-trip resends the full conversation. `stop_speaking()`
 cuts off whatever is playing.
 
+A second engine, [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) 0.6B via
+mlx-audio, is selected by using one of its speaker names as the voice (Ryan,
+Vivian, Serena, Dylan, Eric, Aiden, Uncle_Fu, Ono_Anna, Sohee). It renders at
+about half real time, but takes a free-text `instruct` ("whispering,
+conspiratorial", "barely holding back laughter") and speaks ten languages. The
+8-bit weights (~1 GB) download from `mlx-community` on first use. Lines from both
+engines can be mixed in one `narrate` script.
+
 Both tools return immediately and play in a detached helper process
 (`agyspeak.player`), because `agy` kills any MCP call that runs longer than
 three minutes. Only one player runs at a time; a new request stops the old one.
