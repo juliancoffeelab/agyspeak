@@ -133,5 +133,10 @@ class AgyClient:
         if code != 0 and not turn.response:
             turn.notes.append(f"agy exited with code {code}")
         if turn.conversation_id:
+            if self.conversation_id and turn.conversation_id != self.conversation_id:
+                turn.notes.append(
+                    f"agy did not resume {self.conversation_id[:8]}; it started a new "
+                    f"conversation {turn.conversation_id[:8]} (context is empty)"
+                )
             self.conversation_id = turn.conversation_id
         return turn

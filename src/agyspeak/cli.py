@@ -105,9 +105,13 @@ def _resolve_conversation(prefix: str) -> str:
     matches = [e["id"] for e in _load_sessions() if e["id"].startswith(prefix)]
     if len(matches) == 1:
         return matches[0]
-    if len(matches) > 1:
-        console.print(f"[yellow]ambiguous prefix {prefix}, matches {len(matches)} sessions[/yellow]")
-    return prefix
+    # agy silently starts a fresh conversation for an unknown id, so refuse.
+    if not matches:
+        console.print(f"[red]no saved session starts with {prefix!r}[/red]")
+    else:
+        console.print(f"[red]ambiguous prefix {prefix!r}, matches {len(matches)} sessions[/red]")
+    _print_sessions()
+    raise typer.Exit(1)
 
 
 def _load_session() -> dict:
