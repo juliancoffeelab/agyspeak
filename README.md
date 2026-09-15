@@ -68,7 +68,8 @@ Things learned the hard way:
 ## Letting Gemini talk back (optional)
 
 `agyspeak-mcp` is a small MCP server that exposes a
-`speak(text, voice="af_heart", speed=1.0, engine="kokoro")` tool. It synthesizes
+`speak(text, voice="af_heart", speed=1.0, engine="auto", instruct=None,
+language="auto")` tool. It synthesizes
 with [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M), an 82M-parameter local
 TTS model that runs on CPU/MPS, and plays the result with `afplay`. Pass
 `engine="say"` for the instant macOS voice instead. Once registered, Gemini calls
@@ -79,18 +80,20 @@ can be blended with `+`, e.g. `af_heart+bf_emma`.
 
 A second tool, `narrate(lines=[{text, voice, speed}, ...], pause=0.4)`, plays a
 whole multi-speaker script: playback starts as soon as the first line is
-rendered and the rest stream behind it with no gaps. Gemini uses it for stories
-and dialogues; it also costs one tool round-trip instead of one per line, which
-matters because every round-trip resends the full conversation. `stop_speaking()`
-cuts off whatever is playing.
+rendered and the rest render while it plays. Kokoro normally stays ahead of
+playback; Qwen lines can introduce silent waits while they render. Gemini uses
+the tool for stories and dialogues; it also costs one tool round-trip instead
+of one per line, which matters because every round-trip resends the full
+conversation. `stop_speaking()` cuts off whatever is playing.
 
 A second engine, [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) 0.6B via
 mlx-audio, is selected by using one of its speaker names as the voice (Ryan,
 Vivian, Serena, Dylan, Eric, Aiden, Uncle_Fu, Ono_Anna, Sohee). It renders at
-about half real time, but takes a free-text `instruct` ("whispering,
-conspiratorial", "barely holding back laughter") and speaks ten languages. The
-8-bit weights (~1 GB) download from `mlx-community` on first use. Lines from both
-engines can be mixed in one `narrate` script.
+several times slower than playback on this machine, but takes a free-text
+`instruct` ("whispering, conspiratorial", "barely holding back laughter") and
+speaks ten languages. The 8-bit weights (~1 GB) download from `mlx-community`
+on first use. Lines from both engines can be mixed in one `narrate` script. Use
+Qwen for a few expressive lines and Kokoro for narration or long passages.
 
 Both tools return immediately and play in a detached helper process
 (`agyspeak.player`), because `agy` kills any MCP call that runs longer than

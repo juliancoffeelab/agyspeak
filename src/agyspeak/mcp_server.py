@@ -41,13 +41,14 @@ def speak(
 
     Two engines. Kokoro (voices like af_heart) is fast and clear; intonation
     comes only from punctuation. Qwen (speakers Ryan, Vivian, Serena, Dylan,
-    Eric, Aiden, Uncle_Fu, Ono_Anna, Sohee) is slower, roughly half real time,
-    but follows a free-text `instruct` such as "whispering, conspiratorial" or
-    "barely holding back laughter", and speaks Chinese, Japanese, Korean,
-    German, French, Russian, Portuguese, Spanish and Italian as well as English.
-    Pick Qwen when the user asks for emotion, a style, or a non-English line;
-    otherwise Kokoro. Playback starts in the background and this returns at
-    once; do not call again to "retry" unless the user asks.
+    Eric, Aiden, Uncle_Fu, Ono_Anna, Sohee) renders several times slower than
+    playback, but follows a free-text `instruct` such as "whispering,
+    conspiratorial" or "barely holding back laughter". It speaks Chinese,
+    Japanese, Korean, German, French, Russian, Portuguese, Spanish and Italian
+    as well as English. Pick Qwen for a short line that needs emotion, a style,
+    or another language. Use Kokoro for ordinary speech and longer passages.
+    Playback starts in the background and this returns at once; do not call
+    again to "retry" unless the user asks.
 
     Args:
         text: The exact text to speak. Keep it short, a phrase or a sentence or two.
@@ -81,25 +82,27 @@ def narrate(lines: list[dict], pause: float = 0.4) -> str:
 
     Use this instead of repeated speak() calls whenever the user asks for a
     story, dialogue, or anything with more than one speaker or line. Playback
-    starts within seconds and continues in the background with no gaps while
-    the rest renders, so long scripts are fine. This returns immediately with
-    an estimated duration; the audio is still playing after it returns, so do
-    not call it again to "retry". Starting a new narration stops the previous
-    one. Same rule as speak: only when the user explicitly asks to hear it.
+    starts after the first line renders, then later lines render while it plays.
+    Kokoro normally stays ahead of playback. Qwen may add silent waits, so use
+    it only for a few short lines. This returns immediately with an estimated
+    audio duration; rendering can make the wall-clock time longer. Do not call
+    it again to "retry". Starting a new narration stops the previous one. Same
+    rule as speak: only when the user explicitly asks to hear it.
 
     Args:
         lines: Ordered segments, each {"text": str, "voice": str, "speed": float,
-            "instruct": str, "language": str}. Only text is required; keep the
-            same voice for the same character throughout. Kokoro voice ids:
+            "engine": str, "instruct": str, "language": str}. Only text is
+            required; keep the same voice for the same character throughout.
+            Kokoro voice ids:
             prefix a=American, b=British; then f=female, m=male. Good ones:
             af_heart, af_bella, am_michael, bf_emma, bm_george, bm_lewis; blend
             two with "+", e.g. "af_heart+bf_emma". A Qwen speaker name (Ryan,
             Vivian, Serena, Dylan, Eric, Aiden, Uncle_Fu, Ono_Anna, Sohee)
             selects the slower Qwen engine, which honours "instruct" (emotion
             or style) and "language" for that line. Mixing engines within one
-            script is fine, but Qwen renders slower than it plays, so each Qwen
-            line adds a pause before it; use them for the few lines that need
-            emotion, not for the narrator.
+            script is fine, but Qwen can render slower than it plays and cause
+            a silent wait. Use it for the few lines that need emotion, not for
+            the narrator.
         pause: Silence between lines in seconds.
     """
     try:
