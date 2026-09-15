@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import queue
 import subprocess
 import threading
 import time
@@ -85,23 +86,80 @@ def kokoro_synth(text: str, voice: str = DEFAULT_KOKORO_VOICE, speed: float = 1.
     return save(kokoro_render(text, voice, speed))
 
 
+def _render_line(line: dict) -> np.ndarray:
+    return kokoro_render(
+        line["text"],
+        line.get("voice") or DEFAULT_KOKORO_VOICE,
+        float(line.get("speed") or 1.0),
+    )
+
+
 def kokoro_narrate(lines: list[dict], pause: float = 0.4) -> Path:
     """Render several {text, voice, speed} segments into one WAV with pauses between."""
+    if not lines:
+        raise RuntimeError("no lines to narrate")
     gap = np.zeros(int(KOKORO_RATE * pause), dtype=np.float32)
     parts: list[np.ndarray] = []
     for line in lines:
         if parts:
             parts.append(gap)
-        parts.append(
-            kokoro_render(
-                line["text"],
-                line.get("voice") or DEFAULT_KOKORO_VOICE,
-                float(line.get("speed") or 1.0),
-            )
-        )
-    if not parts:
-        raise RuntimeError("no lines to narrate")
+        parts.append(_render_line(line))
     return save(np.concatenate(parts))
+
+
+def kokoro_narrate_streaming(lines: list[dict], pause: float = 0.4) -> Path:
+    """Like kokoro_narrate, but start playing line 1 while the rest render.
+
+    Playback starts after the first line is synthesized (a few seconds) instead
+    of after the whole script. Each segment is played by its own `afplay`
+    process so rendering in this process can't starve the audio output. The
+    joined clip is still saved and returned.
+    """
+    if not lines:
+        raise RuntimeError("no lines to narrate")
+    gap = np.zeros(int(KOKORO_RATE * pause), dtype=np.float32)
+    ready: queue.Queue[tuple[np.ndarray, Path] | Exception | None] = queue.Queue()
+    SPEECH_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+
+    def render_all() -> None:
+        try:
+            _limit_render_threads()
+            for i, line in enumerate(lines):
+                audio = _render_line(line)
+                if i < len(lines) - 1:
+                    audio = np.concatenate([audio, gap])
+                part = SPEECH_DIR / f"seg_{stamp}_{i:03d}.wav"
+                sf.write(part, audio, KOKORO_RATE, subtype="PCM_16")
+                ready.put((audio, part))
+        except Exception as exc:  # surface to the player loop
+            ready.put(exc)
+        finally:
+            ready.put(None)
+
+    threading.Thread(target=render_all, daemon=True).start()
+    parts: list[np.ndarray] = []
+    current: subprocess.Popen | None = None
+    while (item := ready.get()) is not None:
+        if current is not None:
+            current.wait()  # previous segment done
+        if isinstance(item, Exception):
+            raise item
+        audio, part = item
+        current = subprocess.Popen(["afplay", str(part)])
+        parts.append(audio)
+    if current is not None:
+        current.wait()
+    for i in range(len(parts)):
+        (SPEECH_DIR / f"seg_{stamp}_{i:03d}.wav").unlink(missing_ok=True)
+    return save(np.concatenate(parts))
+
+
+def _limit_render_threads() -> None:
+    """Leave a core free for audio playback and the rest of the machine."""
+    import torch
+
+    torch.set_num_threads(max(1, (os.cpu_count() or 2) - 2))
 
 
 def play(path: Path) -> None:

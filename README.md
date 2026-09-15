@@ -77,10 +77,16 @@ otherwise. Kokoro has no emotion control; intonation comes from punctuation,
 voice choice (a/b = American/British, f/m = female/male) and `speed`. Two voices
 can be blended with `+`, e.g. `af_heart+bf_emma`.
 
-A second tool, `narrate(lines=[{text, voice, speed}, ...], pause=0.4)`, renders a
-whole multi-speaker script into one clip and plays it without gaps. Gemini uses it
-for stories and dialogues; it also costs one tool round-trip instead of one per
-line, which matters because every round-trip resends the full conversation.
+A second tool, `narrate(lines=[{text, voice, speed}, ...], pause=0.4)`, plays a
+whole multi-speaker script: playback starts as soon as the first line is
+rendered and the rest stream behind it with no gaps. Gemini uses it for stories
+and dialogues; it also costs one tool round-trip instead of one per line, which
+matters because every round-trip resends the full conversation. `stop_speaking()`
+cuts off whatever is playing.
+
+Both tools return immediately and play in a detached helper process
+(`agyspeak.player`), because `agy` kills any MCP call that runs longer than
+three minutes. Only one player runs at a time; a new request stops the old one.
 
 Kokoro needs `espeak-ng` for words outside its dictionary (`brew install
 espeak-ng`). The model (~330 MB) downloads from Hugging Face on first use into
@@ -94,7 +100,7 @@ Headless `agy` cannot prompt for permission, so allow that one tool in
 `~/.gemini/antigravity-cli/settings.json`:
 
 ```json
-{ "permissions": { "allow": ["mcp(agyspeak/speak)", "mcp(agyspeak/narrate)"] } }
+{ "permissions": { "allow": ["mcp(agyspeak/speak)", "mcp(agyspeak/narrate)", "mcp(agyspeak/stop_speaking)"] } }
 ```
 
 Note that `agy mcp add` is global, so the tool is visible to every agy session.
