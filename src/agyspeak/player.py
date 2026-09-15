@@ -58,9 +58,17 @@ def start(lines: list[dict], pause: float = 0.4) -> tuple[Path, float]:
     return script, estimate
 
 
+def play_lines(lines: list[dict], pause: float = 0.4) -> None:
+    """Stream Kokoro scripts; buffer scripts containing Qwen before playback."""
+    if any(tts.line_engine(line) == "qwen" for line in lines):
+        tts.play(tts.kokoro_narrate(lines, pause=pause))
+    else:
+        tts.kokoro_narrate_streaming(lines, pause=pause)
+
+
 def main() -> None:
     script = json.loads(Path(sys.argv[1]).read_text())
-    tts.kokoro_narrate_streaming(script["lines"], pause=float(script.get("pause", 0.4)))
+    play_lines(script["lines"], pause=float(script.get("pause", 0.4)))
     try:
         if PID_FILE.read_text().strip() == str(os.getpid()):
             PID_FILE.unlink()

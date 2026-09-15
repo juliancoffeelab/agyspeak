@@ -54,3 +54,7 @@ def test_explicit_qwen_defaults_to_ryan(monkeypatch: pytest.MonkeyPatch) -> None
     tts._render_line({"text": "Hello.", "engine": "qwen"})
 
     assert speakers == [tts.DEFAULT_QWEN_SPEAKER]
+
+
+def test_auto_engine_uses_voice_to_select_qwen() -> None:
+    assert tts.line_engine({"voice": "Ryan", "engine": "auto"}) == "qwen"

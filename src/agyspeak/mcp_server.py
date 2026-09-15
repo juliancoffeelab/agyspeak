@@ -81,13 +81,13 @@ def narrate(lines: list[dict], pause: float = 0.4) -> str:
     """Read a multi-voice script aloud as one continuous performance.
 
     Use this instead of repeated speak() calls whenever the user asks for a
-    story, dialogue, or anything with more than one speaker or line. Playback
-    starts after the first line renders, then later lines render while it plays.
-    Kokoro normally stays ahead of playback. Qwen may add silent waits, so use
-    it only for a few short lines. This returns immediately with an estimated
-    audio duration; rendering can make the wall-clock time longer. Do not call
-    it again to "retry". Starting a new narration stops the previous one. Same
-    rule as speak: only when the user explicitly asks to hear it.
+    story, dialogue, or anything with more than one speaker or line. A
+    Kokoro-only script starts after its first line renders, then renders later
+    lines during playback. A script containing Qwen renders completely before
+    playback, which avoids pauses between lines. This tool still returns
+    immediately; Qwen audio may start much later. Do not call it again to
+    "retry". Starting a new narration stops the previous one. Same rule as
+    speak: only when the user explicitly asks to hear it.
 
     Args:
         lines: Ordered segments, each {"text": str, "voice": str, "speed": float,
@@ -100,8 +100,8 @@ def narrate(lines: list[dict], pause: float = 0.4) -> str:
             Vivian, Serena, Dylan, Eric, Aiden, Uncle_Fu, Ono_Anna, Sohee)
             selects the slower Qwen engine, which honours "instruct" (emotion
             or style) and "language" for that line. Mixing engines within one
-            script is fine, but Qwen can render slower than it plays and cause
-            a silent wait. Use it for the few lines that need emotion, not for
+            script is fine. Any Qwen line makes the whole script render before
+            playback, so use Qwen for the few lines that need emotion, not for
             the narrator.
         pause: Silence between lines in seconds.
     """

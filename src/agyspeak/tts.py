@@ -92,10 +92,19 @@ def kokoro_synth(text: str, voice: str = DEFAULT_KOKORO_VOICE, speed: float = 1.
     return save(kokoro_render(text, voice, speed))
 
 
+def line_engine(line: dict) -> str:
+    """Return the engine selected by a script line."""
+    requested = line.get("engine")
+    if requested and requested != "auto":
+        return str(requested)
+    voice = line.get("voice") or DEFAULT_KOKORO_VOICE
+    return "qwen" if voice in QWEN_SPEAKERS else "kokoro"
+
+
 def _render_line(line: dict) -> np.ndarray:
     """Render one script line; everything is normalised to KOKORO_RATE."""
     voice = line.get("voice") or DEFAULT_KOKORO_VOICE
-    engine = line.get("engine") or ("qwen" if voice in QWEN_SPEAKERS else "kokoro")
+    engine = line_engine(line)
     if engine == "qwen":
         audio, rate = qwen_render(
             line["text"],
