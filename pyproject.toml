@@ -1,0 +1,26 @@
+[project]
+name = "agyspeak"
+version = "0.1.0"
+description = "Terminal voice chat with Gemini through the Antigravity CLI (agy)"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "mcp>=2.2.0",
+    "numpy>=2.5.3",
+    "prompt-toolkit>=3.0.53",
+    "rich>=15.0.0",
+    "sounddevice>=0.5.6",
+    "soundfile>=0.14.0",
+    "typer>=0.27.2",
+]
+
+[project.scripts]
+agyspeak = "agyspeak.cli:app"
+agyspeak-mcp = "agyspeak.mcp_server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["agyspeak"]
