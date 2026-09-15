@@ -5,6 +5,7 @@ description = "Terminal voice chat with Gemini through the Antigravity CLI (agy)
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
+    "kokoro>=0.9.4",
     "mcp>=2.2.0",
     "numpy>=2.5.3",
     "prompt-toolkit>=3.0.53",

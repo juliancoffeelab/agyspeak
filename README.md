@@ -67,9 +67,18 @@ Things learned the hard way:
 
 ## Letting Gemini talk back (optional)
 
-`agyspeak-mcp` is a small MCP server that exposes a `speak(text, voice="Samantha")`
-tool backed by macOS `say`. Once registered, Gemini calls it when you ask to hear
-something ("say that", "read it back"), and stays quiet otherwise.
+`agyspeak-mcp` is a small MCP server that exposes a
+`speak(text, voice="af_heart", speed=1.0, engine="kokoro")` tool. It synthesizes
+with [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M), an 82M-parameter local
+TTS model that runs on CPU/MPS, and plays the result with `afplay`. Pass
+`engine="say"` for the instant macOS voice instead. Once registered, Gemini calls
+it when you ask to hear something ("say that", "read it back"), and stays quiet
+otherwise. Kokoro has no emotion control; intonation comes from punctuation,
+voice choice (a/b = American/British, f/m = female/male) and `speed`.
+
+Kokoro needs `espeak-ng` for words outside its dictionary (`brew install
+espeak-ng`). The model (~330 MB) downloads from Hugging Face on first use into
+`~/.cache/huggingface/`, and generated clips land in `~/.cache/agyspeak/speech/`.
 
 ```sh
 agy mcp add agyspeak "$PWD/.venv/bin/agyspeak-mcp"
