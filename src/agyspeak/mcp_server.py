@@ -3,17 +3,20 @@
 Register once with:
     agy mcp add agyspeak /path/to/.venv/bin/agyspeak-mcp
 
-Audio is rendered and played by a detached helper (see player.py) because agy
-times out MCP calls after 3 minutes; the tools here return immediately.
+Audio is rendered and played by a persistent local worker because agy times out
+long MCP calls and may restart this server between turns.
 """
 
 from __future__ import annotations
 
+import json
+
 from mcp.server.mcpserver import MCPServer
 
-from agyspeak import player, tts
+from agyspeak import library, player, tts, worker
 
 server = MCPServer("agyspeak")
+
 
 def _reason(exc: Exception) -> str:
     text = str(exc)
@@ -119,8 +122,50 @@ def narrate(lines: list[dict], pause: float = 0.4) -> str:
 @server.tool()
 def stop_speaking() -> str:
     """Stop any speech or narration currently playing. Call when the user asks
-    to stop, pause, or be quiet."""
+    to stop, pause, or be quiet. Models remain loaded. If a line is currently
+    rendering, it finishes silently before the worker accepts more speech."""
     return "stopped" if player.stop() else "nothing was playing"
+
+
+@server.tool()
+def list_audio(kind: str = "all", limit: int = 10) -> str:
+    """List recent microphone recordings and generated speech in agyspeak's cache.
+
+    Call when the user asks what audio is available, or before replaying an
+    older item. `kind` is "all", "recording", or "speech". Returns newest first.
+    """
+    try:
+        return json.dumps(library.list_audio(kind, limit), ensure_ascii=False)
+    except Exception as exc:
+        return f"list audio failed: {_reason(exc)}"
+
+
+@server.tool()
+def replay_audio(kind: str, audio_id: str = "latest") -> str:
+    """Replay saved agyspeak audio on the user's machine.
+
+    Only call when the user explicitly asks to hear a recording or generated
+    speech. `kind` is "recording" or "speech". Use an id from list_audio(), or
+    "latest". Playback runs in the background and replaces current speech.
+    """
+    try:
+        path = library.resolve_audio(kind, audio_id)
+        worker.replay(path)
+        return f"replaying {kind}/{audio_id}"
+    except Exception as exc:
+        return f"replay failed: {_reason(exc)}"
+
+
+@server.tool()
+def unload_speech() -> str:
+    """Stop speech and unload all speech models from memory.
+
+    Call only when the user asks to unload, shut down, or free speech-model
+    memory. The next speak, narrate, or replay call starts the worker again.
+    """
+    if player.unload():
+        return "speech worker unloaded"
+    return "speech worker was not running"
 
 
 def main() -> None:

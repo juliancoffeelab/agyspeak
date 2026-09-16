@@ -1,4 +1,4 @@
-"""Local text-to-speech backends: Kokoro (neural, default) and macOS `say`."""
+"""Local text-to-speech backends: Kokoro, Qwen3-TTS, and macOS `say`."""
 
 from __future__ import annotations
 
@@ -29,6 +29,10 @@ KOKORO_LANGS = {"a": "American English", "b": "British English"}
 
 _pipelines: dict[str, object] = {}
 _lock = threading.Lock()
+
+
+class SpeechCancelled(RuntimeError):
+    pass
 
 
 def _snapshot(repo: str) -> Path:
@@ -121,7 +125,10 @@ def _render_line(line: dict) -> np.ndarray:
 
 
 def kokoro_narrate(
-    lines: list[dict], pause: float = 0.4, output_path: Path | None = None
+    lines: list[dict],
+    pause: float = 0.4,
+    output_path: Path | None = None,
+    stop_event: threading.Event | None = None,
 ) -> Path:
     """Render several {text, voice, speed} segments into one WAV with pauses between."""
     if not lines:
@@ -129,14 +136,21 @@ def kokoro_narrate(
     gap = np.zeros(int(KOKORO_RATE * pause), dtype=np.float32)
     parts: list[np.ndarray] = []
     for line in lines:
+        if stop_event and stop_event.is_set():
+            raise SpeechCancelled("speech cancelled")
         if parts:
             parts.append(gap)
         parts.append(_render_line(line))
+    if stop_event and stop_event.is_set():
+        raise SpeechCancelled("speech cancelled")
     return save(np.concatenate(parts), output_path)
 
 
 def kokoro_narrate_streaming(
-    lines: list[dict], pause: float = 0.4, output_path: Path | None = None
+    lines: list[dict],
+    pause: float = 0.4,
+    output_path: Path | None = None,
+    stop_event: threading.Event | None = None,
 ) -> Path:
     """Like kokoro_narrate, but start playing line 1 while the rest render.
 
@@ -160,6 +174,8 @@ def kokoro_narrate_streaming(
         try:
             _limit_render_threads()
             for i, line in enumerate(lines):
+                if stop_event and stop_event.is_set():
+                    raise SpeechCancelled("speech cancelled")
                 audio = _render_line(line)
                 if i < len(lines) - 1:
                     audio = np.concatenate([audio, gap])
@@ -171,21 +187,22 @@ def kokoro_narrate_streaming(
         finally:
             ready.put(None)
 
-    threading.Thread(target=render_all, daemon=True).start()
+    renderer = threading.Thread(target=render_all, daemon=True)
+    renderer.start()
     parts: list[np.ndarray] = []
-    current: subprocess.Popen | None = None
-    while (item := ready.get()) is not None:
-        if current is not None:
-            current.wait()  # previous segment done
-        if isinstance(item, Exception):
-            raise item
-        audio, part = item
-        current = subprocess.Popen(["afplay", str(part)])
-        parts.append(audio)
-    if current is not None:
-        current.wait()
-    for i in range(len(parts)):
-        (SPEECH_DIR / f"seg_{stamp}_{i:03d}.wav").unlink(missing_ok=True)
+    try:
+        while (item := ready.get()) is not None:
+            if isinstance(item, Exception):
+                raise item
+            if stop_event and stop_event.is_set():
+                raise SpeechCancelled("speech cancelled")
+            audio, part = item
+            parts.append(audio)
+            play(part, stop_event=stop_event)
+    finally:
+        renderer.join()
+        for part in SPEECH_DIR.glob(f"seg_{stamp}_*.wav"):
+            part.unlink(missing_ok=True)
     return save(np.concatenate(parts), output_path)
 
 
@@ -242,8 +259,19 @@ def resample(audio: np.ndarray, src: int, dst: int) -> np.ndarray:
     return np.interp(x_new, x_old, audio).astype(np.float32)
 
 
-def play(path: Path) -> None:
-    subprocess.run(["afplay", str(path)], check=True)
+def play(path: Path, stop_event: threading.Event | None = None) -> None:
+    if stop_event and stop_event.is_set():
+        raise SpeechCancelled("speech cancelled")
+    proc = subprocess.Popen(["afplay", str(path)])
+    while proc.poll() is None:
+        if stop_event and stop_event.wait(0.1):
+            proc.terminate()
+            proc.wait()
+            raise SpeechCancelled("speech cancelled")
+        if stop_event is None:
+            proc.wait()
+    if proc.returncode:
+        raise subprocess.CalledProcessError(proc.returncode, proc.args)
 
 
 def say(text: str, voice: str = DEFAULT_SAY_VOICE, rate: int | None = None) -> None:

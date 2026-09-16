@@ -1,10 +1,9 @@
 import json
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
-from agyspeak import player
+from agyspeak import player, worker
 
 
 def test_qwen_script_renders_fully_before_playback(
@@ -16,10 +15,16 @@ def test_qwen_script_renders_fully_before_playback(
     monkeypatch.setattr(
         player.tts,
         "kokoro_narrate",
-        lambda lines, pause, output_path: calls.append(("render", lines, pause, output_path))
+        lambda lines, pause, output_path, stop_event: calls.append(
+            ("render", lines, pause, output_path, stop_event)
+        )
         or clip,
     )
-    monkeypatch.setattr(player.tts, "play", lambda path: calls.append(("play", path)))
+    monkeypatch.setattr(
+        player.tts,
+        "play",
+        lambda path, stop_event: calls.append(("play", path, stop_event)),
+    )
     monkeypatch.setattr(
         player.tts,
         "kokoro_narrate_streaming",
@@ -30,7 +35,7 @@ def test_qwen_script_renders_fully_before_playback(
     result = player.play_lines(lines, pause=0.2, output_path=clip)
 
     assert result == clip
-    assert calls == [("render", lines, 0.2, clip), ("play", clip)]
+    assert calls == [("render", lines, 0.2, clip, None), ("play", clip, None)]
 
 
 def test_kokoro_only_script_streams(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -40,7 +45,10 @@ def test_kokoro_only_script_streams(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         player.tts,
         "kokoro_narrate_streaming",
-        lambda actual, pause, output_path: calls.append((actual, pause, output_path)) or clip,
+        lambda actual, pause, output_path, stop_event: calls.append(
+            (actual, pause, output_path, stop_event)
+        )
+        or clip,
     )
     monkeypatch.setattr(
         player.tts,
@@ -52,20 +60,15 @@ def test_kokoro_only_script_streams(monkeypatch: pytest.MonkeyPatch) -> None:
     result = player.play_lines(lines, pause=0.3, output_path=clip)
 
     assert result == clip
-    assert calls == [(lines, 0.3, clip)]
+    assert calls == [(lines, 0.3, clip, None)]
 
 
 def test_start_gives_metadata_and_audio_the_same_basename(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(player.tts, "SPEECH_DIR", tmp_path)
-    monkeypatch.setattr(player, "PID_FILE", tmp_path / "player.pid")
-    monkeypatch.setattr(player, "stop", lambda: False)
-    monkeypatch.setattr(
-        player.subprocess,
-        "Popen",
-        lambda *args, **kwargs: SimpleNamespace(pid=123),
-    )
+    submitted = []
+    monkeypatch.setattr(worker, "submit_script", submitted.append)
 
     script_path, _ = player.start([{"text": "Hello", "voice": "af_heart"}])
     metadata = json.loads(script_path.read_text())
@@ -73,3 +76,4 @@ def test_start_gives_metadata_and_audio_the_same_basename(
     assert script_path.stem == Path(metadata["audio_file"]).stem
     assert metadata["status"] == "queued"
     assert metadata["lines"] == [{"text": "Hello", "voice": "af_heart"}]
+    assert submitted == [script_path]

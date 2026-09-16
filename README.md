@@ -85,7 +85,8 @@ renders completely before playback so it has no pauses between lines. The MCP
 tool still returns immediately. Gemini uses it for stories and dialogues; it
 also costs one tool round-trip instead of one per line, which matters because
 every round-trip resends the full conversation. `stop_speaking()` cuts off
-whatever is playing.
+whatever is playing while keeping loaded models warm. An in-flight render
+finishes its current line silently before the worker starts another request.
 
 A second engine, [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) 0.6B via
 mlx-audio, is selected by using one of its speaker names as the voice (Ryan,
@@ -96,9 +97,10 @@ speaks ten languages. The 8-bit weights (~1 GB) download from `mlx-community`
 on first use. Lines from both engines can be mixed in one `narrate` script. Use
 Qwen for a few expressive lines and Kokoro for narration or long passages.
 
-Both tools return immediately and play in a detached helper process
-(`agyspeak.player`), because `agy` kills any MCP call that runs longer than
-three minutes. Only one player runs at a time; a new request stops the old one.
+Speech requests go to a persistent local worker over a Unix socket. MCP calls
+return immediately, and loaded Kokoro or Qwen models stay warm between calls.
+Only one request runs at a time; a new request cancels the old one.
+`unload_speech()` stops the worker and releases its model memory.
 
 Kokoro needs `espeak-ng` for words outside its dictionary (`brew install
 espeak-ng`). The model (~330 MB) downloads from Hugging Face on first use into
@@ -106,6 +108,11 @@ espeak-ng`). The model (~330 MB) downloads from Hugging Face on first use into
 `~/.cache/agyspeak/speech/` as matching `speech_<id>.json` and `.wav` files.
 The JSON records the text, voices, settings, status, and audio duration, so the
 archive can be searched with tools such as `rg` or `jq`.
+
+The MCP also exposes `list_audio(kind="all", limit=10)` and
+`replay_audio(kind, audio_id="latest")`. They let the assistant discover and
+replay microphone recordings or generated speech without receiving arbitrary
+filesystem access.
 
 ```sh
 agy mcp add agyspeak "$PWD/.venv/bin/agyspeak-mcp"
@@ -115,7 +122,7 @@ Headless `agy` cannot prompt for permission, so allow that one tool in
 `~/.gemini/antigravity-cli/settings.json`:
 
 ```json
-{ "permissions": { "allow": ["mcp(agyspeak/speak)", "mcp(agyspeak/narrate)", "mcp(agyspeak/stop_speaking)"] } }
+{ "permissions": { "allow": ["mcp(agyspeak/speak)", "mcp(agyspeak/narrate)", "mcp(agyspeak/stop_speaking)", "mcp(agyspeak/list_audio)", "mcp(agyspeak/replay_audio)", "mcp(agyspeak/unload_speech)"] } }
 ```
 
 Note that `agy mcp add` is global, so the tool is visible to every agy session.
