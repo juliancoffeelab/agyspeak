@@ -266,7 +266,9 @@ def main(
         event.app.current_buffer.validate_and_handle()
 
     session: PromptSession[str] = PromptSession(
-        history=FileHistory(str(HISTORY)), key_bindings=bindings
+        history=FileHistory(str(HISTORY)),
+        key_bindings=bindings,
+        prompt_continuation=lambda width, _line, _wrap: " " * width,
     )
 
     console.print(
