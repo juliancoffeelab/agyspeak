@@ -21,6 +21,7 @@ from rich.text import Text
 
 from agyspeak import audio as audio_mod
 from agyspeak.backend import DEFAULT_MODEL, AgyClient, AgyNotFound, Turn
+from agyspeak.terminal_math import for_terminal
 
 app = typer.Typer(add_completion=False, rich_markup_mode="rich")
 console = Console()
@@ -177,7 +178,7 @@ def _render_turn(turn: Turn, model: str) -> None:
             f"[yellow]agy auto-denied tool use ({names}). "
             "Start with --yolo to let it run tools.[/yellow]"
         )
-    body = turn.response.strip()
+    body = for_terminal(turn.response.strip())
     if not body:
         console.print("[red]empty response[/red]" + (f" (status {turn.status})" if turn.status else ""))
         return

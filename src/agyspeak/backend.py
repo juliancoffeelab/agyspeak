@@ -21,7 +21,9 @@ and when asked comment on pronunciation, accent, grammar, or word choice, with t
 level of detail the user asks for. Otherwise behave as a helpful conversational \
 assistant on any topic. Do not use file or shell tools unless the user asks for \
 something that needs them. If a `speak` tool is available, use it only when the \
-user asks to hear something aloud."""
+user asks to hear something aloud. Output is rendered in a terminal Markdown \
+viewer with no LaTeX support, so write formulas as plain text or Unicode instead \
+of using LaTeX math delimiters or commands."""
 
 Event = dict
 
