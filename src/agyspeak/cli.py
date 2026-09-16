@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
+import select
 import subprocess
 import sys
-import threading
 import time
 from pathlib import Path
 
@@ -122,6 +123,19 @@ def _load_session() -> dict:
         return {}
 
 
+def _recording_input(fd: int, timeout: float = 0.05) -> str | None:
+    """Return stop/cancel for terminal input without assuming cooked line mode."""
+    ready, _, _ = select.select([fd], [], [], timeout)
+    if not ready:
+        return None
+    data = os.read(fd, 1024)
+    if not data or b"\x03" in data:
+        return "cancel"
+    if b"\r" in data or b"\n" in data:
+        return "stop"
+    return None
+
+
 def _record(device: int | None) -> Path | None:
     """Record until Enter is pressed. Returns the saved path, or None if cancelled/empty."""
     rec = audio_mod.Recorder(device=device)
@@ -131,19 +145,11 @@ def _record(device: int | None) -> Path | None:
         console.print(f"[red]Could not open microphone:[/red] {exc}")
         return None
 
-    stop = threading.Event()
-
-    def wait_enter() -> None:
-        try:
-            sys.stdin.readline()
-        finally:
-            stop.set()
-
-    threading.Thread(target=wait_enter, daemon=True).start()
     cancelled = False
+    input_fd = sys.stdin.fileno()
     try:
         with Live(console=console, refresh_per_second=15, transient=True) as live:
-            while not stop.is_set():
+            while True:
                 bar = audio_mod.level_bar(rec.rms)
                 live.update(
                     Text.assemble(
@@ -153,7 +159,12 @@ def _record(device: int | None) -> Path | None:
                         ("   Enter to stop, ctrl+c to cancel", "dim"),
                     )
                 )
-                time.sleep(0.05)
+                action = _recording_input(input_fd)
+                if action == "stop":
+                    break
+                if action == "cancel":
+                    cancelled = True
+                    break
     except KeyboardInterrupt:
         cancelled = True
     samples = rec.stop()

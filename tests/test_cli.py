@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import numpy as np
+
 from agyspeak import cli
 
 
@@ -34,3 +36,44 @@ def test_enter_with_text_submits_text_unchanged() -> None:
 
     assert buffer.text == "hello"
     assert buffer.submitted
+
+
+def test_cancelling_recording_leaves_no_background_stdin_reader(monkeypatch) -> None:
+    class Recorder:
+        sample_rate = 16000
+        rms = 0.0
+        elapsed = 0.1
+        stopped = False
+
+        def start(self) -> None:
+            pass
+
+        def stop(self) -> np.ndarray:
+            self.stopped = True
+            return np.zeros(16000, dtype=np.float32)
+
+    recorder = Recorder()
+    monkeypatch.setattr(cli.audio_mod, "Recorder", lambda device: recorder)
+    monkeypatch.setattr(cli.sys, "stdin", SimpleNamespace(fileno=lambda: 42))
+    monkeypatch.setattr(
+        cli.select,
+        "select",
+        lambda *args: (_ for _ in ()).throw(KeyboardInterrupt),
+    )
+
+    assert cli._record(None) is None
+    assert recorder.stopped
+
+
+def test_recording_input_accepts_carriage_return(monkeypatch) -> None:
+    monkeypatch.setattr(cli.select, "select", lambda *args: ([42], [], []))
+    monkeypatch.setattr(cli.os, "read", lambda fd, size: b"\r")
+
+    assert cli._recording_input(42) == "stop"
+
+
+def test_recording_input_accepts_ctrl_c_byte(monkeypatch) -> None:
+    monkeypatch.setattr(cli.select, "select", lambda *args: ([42], [], []))
+    monkeypatch.setattr(cli.os, "read", lambda fd, size: b"\x03")
+
+    assert cli._recording_input(42) == "cancel"
