@@ -34,7 +34,7 @@ HELP = r"""
 [bold]Commands[/bold]
   /a \[note]         record from the mic; Enter stops and sends immediately
   /rec, /r \[note]   record, then ask for a note before sending
-  Space             same as /a when the prompt is empty
+  Enter             start recording when the prompt is empty
   /last \[note]      re-send the most recent recording
   /model \[name]     show or switch the model (see /models)
   /models           list models available through agy
@@ -213,6 +213,14 @@ def _run_agy(*args: str) -> None:
     subprocess.run(["agy", *args], check=False)
 
 
+def _submit_or_record(event) -> None:  # noqa: ANN001
+    """Submit typed input, or turn an empty prompt into the audio command."""
+    buffer = event.app.current_buffer
+    if not buffer.text.strip():
+        buffer.text = "/a"
+    buffer.validate_and_handle()
+
+
 @app.command()
 def main(
     model: str = typer.Option(DEFAULT_MODEL, "--model", "-m", help="agy model id (see `agy models`)"),
@@ -257,13 +265,7 @@ def main(
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     bindings = KeyBindings()
 
-    @bindings.add(" ")
-    def _(event) -> None:  # noqa: ANN001
-        if event.app.current_buffer.text:
-            event.app.current_buffer.insert_text(" ")
-            return
-        event.app.current_buffer.text = "/a"
-        event.app.current_buffer.validate_and_handle()
+    bindings.add("enter")(_submit_or_record)
 
     session: PromptSession[str] = PromptSession(
         history=FileHistory(str(HISTORY)),
@@ -275,7 +277,7 @@ def main(
         Panel(
             f"model [bold]{client.model}[/bold]"
             + (f" · resuming [dim]{client.conversation_id}[/dim]" if client.conversation_id else "")
-            + "\n[dim]Space to talk · /help for commands[/dim]",
+            + "\n[dim]Enter to talk · /help for commands[/dim]",
             title="agyspeak",
             border_style="green",
         )
