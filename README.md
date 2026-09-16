@@ -25,7 +25,7 @@ Inside the chat:
 | input              | effect                                                   |
 | ------------------ | -------------------------------------------------------- |
 | plain text         | sent as a text message                                   |
-| `/a` or ctrl+r     | record until Enter, then send right away                 |
+| `/a` or Space      | record until Enter, then send right away                 |
 | `/rec`             | record until Enter, then ask for a note, then send       |
 | `/a some note`     | record and send with the note attached                   |
 | `/last [note]`     | re-send the most recent recording                        |

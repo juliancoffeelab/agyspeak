@@ -34,7 +34,7 @@ HELP = r"""
 [bold]Commands[/bold]
   /a \[note]         record from the mic; Enter stops and sends immediately
   /rec, /r \[note]   record, then ask for a note before sending
-  ctrl+r            same as /a
+  Space             same as /a when the prompt is empty
   /last \[note]      re-send the most recent recording
   /model \[name]     show or switch the model (see /models)
   /models           list models available through agy
@@ -257,8 +257,11 @@ def main(
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     bindings = KeyBindings()
 
-    @bindings.add("c-r")
+    @bindings.add(" ")
     def _(event) -> None:  # noqa: ANN001
+        if event.app.current_buffer.text:
+            event.app.current_buffer.insert_text(" ")
+            return
         event.app.current_buffer.text = "/a"
         event.app.current_buffer.validate_and_handle()
 
@@ -270,7 +273,7 @@ def main(
         Panel(
             f"model [bold]{client.model}[/bold]"
             + (f" · resuming [dim]{client.conversation_id}[/dim]" if client.conversation_id else "")
-            + "\n[dim]/a or ctrl+r to talk · /help for commands[/dim]",
+            + "\n[dim]Space to talk · /help for commands[/dim]",
             title="agyspeak",
             border_style="green",
         )
