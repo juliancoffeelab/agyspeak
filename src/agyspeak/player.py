@@ -13,7 +13,8 @@ import os
 import signal
 import subprocess
 import sys
-import time
+import wave
+from datetime import datetime
 from pathlib import Path
 
 from agyspeak import tts
@@ -43,8 +44,27 @@ def start(lines: list[dict], pause: float = 0.4) -> tuple[Path, float]:
     """Launch a detached player for the script; return (script path, estimated seconds)."""
     stop()
     tts.SPEECH_DIR.mkdir(parents=True, exist_ok=True)
-    script = tts.SPEECH_DIR / f"script_{time.strftime('%Y%m%d-%H%M%S')}.json"
-    script.write_text(json.dumps({"lines": lines, "pause": pause}))
+    created = datetime.now()
+    request_id = created.strftime("%Y%m%d-%H%M%S-%f")
+    script = tts.SPEECH_DIR / f"speech_{request_id}.json"
+    audio = script.with_suffix(".wav")
+    words = sum(len(str(line.get("text", "")).split()) for line in lines)
+    estimate = words / WORDS_PER_SECOND + pause * max(len(lines) - 1, 0)
+    script.write_text(
+        json.dumps(
+            {
+                "id": request_id,
+                "created_at": created.astimezone().isoformat(),
+                "status": "queued",
+                "audio_file": audio.name,
+                "estimated_seconds": estimate,
+                "lines": lines,
+                "pause": pause,
+            },
+            indent=2,
+        )
+        + "\n"
+    )
     proc = subprocess.Popen(
         [sys.executable, "-m", "agyspeak.player", str(script)],
         stdin=subprocess.DEVNULL,
@@ -53,22 +73,42 @@ def start(lines: list[dict], pause: float = 0.4) -> tuple[Path, float]:
         start_new_session=True,  # survives the MCP server being killed by agy
     )
     PID_FILE.write_text(str(proc.pid))
-    words = sum(len(str(line.get("text", "")).split()) for line in lines)
-    estimate = words / WORDS_PER_SECOND + pause * max(len(lines) - 1, 0)
     return script, estimate
 
 
-def play_lines(lines: list[dict], pause: float = 0.4) -> None:
+def play_lines(lines: list[dict], pause: float = 0.4, output_path: Path | None = None) -> Path:
     """Stream Kokoro scripts; buffer scripts containing Qwen before playback."""
     if any(tts.line_engine(line) == "qwen" for line in lines):
-        tts.play(tts.kokoro_narrate(lines, pause=pause))
-    else:
-        tts.kokoro_narrate_streaming(lines, pause=pause)
+        path = tts.kokoro_narrate(lines, pause=pause, output_path=output_path)
+        tts.play(path)
+        return path
+    return tts.kokoro_narrate_streaming(lines, pause=pause, output_path=output_path)
+
+
+def _finish_metadata(script_path: Path, script: dict, status: str, error: str | None = None) -> None:
+    script["status"] = status
+    script["completed_at"] = datetime.now().astimezone().isoformat()
+    if error:
+        script["error"] = error
+    elif (audio_path := script_path.with_suffix(".wav")).exists():
+        with wave.open(str(audio_path), "rb") as audio:
+            script["duration_seconds"] = audio.getnframes() / audio.getframerate()
+    script_path.write_text(json.dumps(script, indent=2) + "\n")
 
 
 def main() -> None:
-    script = json.loads(Path(sys.argv[1]).read_text())
-    play_lines(script["lines"], pause=float(script.get("pause", 0.4)))
+    script_path = Path(sys.argv[1])
+    script = json.loads(script_path.read_text())
+    try:
+        play_lines(
+            script["lines"],
+            pause=float(script.get("pause", 0.4)),
+            output_path=script_path.with_suffix(".wav"),
+        )
+    except Exception as exc:
+        _finish_metadata(script_path, script, "failed", str(exc))
+        raise
+    _finish_metadata(script_path, script, "completed")
     try:
         if PID_FILE.read_text().strip() == str(os.getpid()):
             PID_FILE.unlink()

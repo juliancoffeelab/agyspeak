@@ -7,7 +7,7 @@ import os
 import queue
 import subprocess
 import threading
-import time
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -80,9 +80,11 @@ def kokoro_render(text: str, voice: str = DEFAULT_KOKORO_VOICE, speed: float = 1
     return np.concatenate(chunks)
 
 
-def save(audio: np.ndarray) -> Path:
-    SPEECH_DIR.mkdir(parents=True, exist_ok=True)
-    path = SPEECH_DIR / f"tts_{time.strftime('%Y%m%d-%H%M%S')}.wav"
+def save(audio: np.ndarray, path: Path | None = None) -> Path:
+    if path is None:
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        path = SPEECH_DIR / f"tts_{stamp}.wav"
+    path.parent.mkdir(parents=True, exist_ok=True)
     sf.write(path, audio, KOKORO_RATE, subtype="PCM_16")
     return path
 
@@ -118,7 +120,9 @@ def _render_line(line: dict) -> np.ndarray:
     return kokoro_render(line["text"], voice, float(line.get("speed") or 1.0))
 
 
-def kokoro_narrate(lines: list[dict], pause: float = 0.4) -> Path:
+def kokoro_narrate(
+    lines: list[dict], pause: float = 0.4, output_path: Path | None = None
+) -> Path:
     """Render several {text, voice, speed} segments into one WAV with pauses between."""
     if not lines:
         raise RuntimeError("no lines to narrate")
@@ -128,10 +132,12 @@ def kokoro_narrate(lines: list[dict], pause: float = 0.4) -> Path:
         if parts:
             parts.append(gap)
         parts.append(_render_line(line))
-    return save(np.concatenate(parts))
+    return save(np.concatenate(parts), output_path)
 
 
-def kokoro_narrate_streaming(lines: list[dict], pause: float = 0.4) -> Path:
+def kokoro_narrate_streaming(
+    lines: list[dict], pause: float = 0.4, output_path: Path | None = None
+) -> Path:
     """Like kokoro_narrate, but start playing line 1 while the rest render.
 
     Playback starts after the first line is synthesized (a few seconds) instead
@@ -144,7 +150,11 @@ def kokoro_narrate_streaming(lines: list[dict], pause: float = 0.4) -> Path:
     gap = np.zeros(int(KOKORO_RATE * pause), dtype=np.float32)
     ready: queue.Queue[tuple[np.ndarray, Path] | Exception | None] = queue.Queue()
     SPEECH_DIR.mkdir(parents=True, exist_ok=True)
-    stamp = time.strftime("%Y%m%d-%H%M%S")
+    if output_path is None:
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        output_path = SPEECH_DIR / f"tts_{stamp}.wav"
+    else:
+        stamp = output_path.stem
 
     def render_all() -> None:
         try:
@@ -176,7 +186,7 @@ def kokoro_narrate_streaming(lines: list[dict], pause: float = 0.4) -> Path:
         current.wait()
     for i in range(len(parts)):
         (SPEECH_DIR / f"seg_{stamp}_{i:03d}.wav").unlink(missing_ok=True)
-    return save(np.concatenate(parts))
+    return save(np.concatenate(parts), output_path)
 
 
 def _limit_render_threads() -> None:

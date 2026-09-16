@@ -102,7 +102,10 @@ three minutes. Only one player runs at a time; a new request stops the old one.
 
 Kokoro needs `espeak-ng` for words outside its dictionary (`brew install
 espeak-ng`). The model (~330 MB) downloads from Hugging Face on first use into
-`~/.cache/huggingface/`, and generated clips land in `~/.cache/agyspeak/speech/`.
+`~/.cache/huggingface/`. Generated speech is kept under
+`~/.cache/agyspeak/speech/` as matching `speech_<id>.json` and `.wav` files.
+The JSON records the text, voices, settings, status, and audio duration, so the
+archive can be searched with tools such as `rg` or `jq`.
 
 ```sh
 agy mcp add agyspeak "$PWD/.venv/bin/agyspeak-mcp"

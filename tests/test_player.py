@@ -1,4 +1,6 @@
+import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -14,7 +16,8 @@ def test_qwen_script_renders_fully_before_playback(
     monkeypatch.setattr(
         player.tts,
         "kokoro_narrate",
-        lambda lines, pause: calls.append(("render", lines, pause)) or clip,
+        lambda lines, pause, output_path: calls.append(("render", lines, pause, output_path))
+        or clip,
     )
     monkeypatch.setattr(player.tts, "play", lambda path: calls.append(("play", path)))
     monkeypatch.setattr(
@@ -24,9 +27,10 @@ def test_qwen_script_renders_fully_before_playback(
     )
     lines = [{"text": "Narrator", "voice": "af_heart"}, {"text": "Hello", "voice": "Ryan"}]
 
-    player.play_lines(lines, pause=0.2)
+    result = player.play_lines(lines, pause=0.2, output_path=clip)
 
-    assert calls == [("render", lines, 0.2), ("play", clip)]
+    assert result == clip
+    assert calls == [("render", lines, 0.2, clip), ("play", clip)]
 
 
 def test_kokoro_only_script_streams(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -36,7 +40,7 @@ def test_kokoro_only_script_streams(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         player.tts,
         "kokoro_narrate_streaming",
-        lambda actual, pause: calls.append((actual, pause)),
+        lambda actual, pause, output_path: calls.append((actual, pause, output_path)) or clip,
     )
     monkeypatch.setattr(
         player.tts,
@@ -44,6 +48,28 @@ def test_kokoro_only_script_streams(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda *args, **kwargs: pytest.fail("Kokoro-only scripts should stream"),
     )
 
-    player.play_lines(lines, pause=0.3)
+    clip = Path("speech.wav")
+    result = player.play_lines(lines, pause=0.3, output_path=clip)
 
-    assert calls == [(lines, 0.3)]
+    assert result == clip
+    assert calls == [(lines, 0.3, clip)]
+
+
+def test_start_gives_metadata_and_audio_the_same_basename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(player.tts, "SPEECH_DIR", tmp_path)
+    monkeypatch.setattr(player, "PID_FILE", tmp_path / "player.pid")
+    monkeypatch.setattr(player, "stop", lambda: False)
+    monkeypatch.setattr(
+        player.subprocess,
+        "Popen",
+        lambda *args, **kwargs: SimpleNamespace(pid=123),
+    )
+
+    script_path, _ = player.start([{"text": "Hello", "voice": "af_heart"}])
+    metadata = json.loads(script_path.read_text())
+
+    assert script_path.stem == Path(metadata["audio_file"]).stem
+    assert metadata["status"] == "queued"
+    assert metadata["lines"] == [{"text": "Hello", "voice": "af_heart"}]
