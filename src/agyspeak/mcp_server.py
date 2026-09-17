@@ -3,8 +3,8 @@
 Register once with:
     agy mcp add agyspeak /path/to/.venv/bin/agyspeak-mcp
 
-Audio is rendered and played by a persistent local worker because agy times out
-long MCP calls and may restart this server between turns.
+Audio is rendered and played by the parent agyspeak harness because agy may
+restart this MCP server between turns.
 """
 
 from __future__ import annotations
@@ -123,7 +123,7 @@ def narrate(lines: list[dict], pause: float = 0.4) -> str:
 def stop_speaking() -> str:
     """Stop any speech or narration currently playing. Call when the user asks
     to stop, pause, or be quiet. Models remain loaded. If a line is currently
-    rendering, it finishes silently before the worker accepts more speech."""
+    rendering, it finishes silently before the harness accepts more speech."""
     return "stopped" if player.stop() else "nothing was playing"
 
 
@@ -161,11 +161,11 @@ def unload_speech() -> str:
     """Stop speech and unload all speech models from memory.
 
     Call only when the user asks to unload, shut down, or free speech-model
-    memory. The next speak, narrate, or replay call starts the worker again.
+    memory. The harness remains available, so a later speech call reloads it.
     """
     if player.unload():
-        return "speech worker unloaded"
-    return "speech worker was not running"
+        return "speech models queued for unloading"
+    return "speech service was not running"
 
 
 def main() -> None:

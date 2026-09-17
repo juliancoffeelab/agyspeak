@@ -7,7 +7,7 @@ on your Antigravity subscription with no API key.
 ## Requirements
 
 - macOS with the `agy` CLI installed and logged in
-- Python 3.14 and [uv](https://docs.astral.sh/uv/)
+- Python 3.13 and [uv](https://docs.astral.sh/uv/)
 
 ## Run
 
@@ -20,9 +20,9 @@ uv run agyspeak --conversation 2bbead17   # resume one by id (prefix is fine)
 uv run agyspeak --yolo               # let agy run tools without asking
 ```
 
-Press Tab at an empty prompt to toggle full voice mode. While enabled, every
+Press Tab at the prompt to toggle full voice mode. While enabled, every
 model reply is cleaned of Markdown and spoken asynchronously with Kokoro; Tab
-again unloads the speech worker and releases the model. Use `/voice <name>` to
+again unloads the model. Use `/voice <name>` to
 switch voices or `/voices` to list them. `--voice bm_fable` selects the startup
 voice without enabling speech. The selected voice and on/off state are restored
 after restarting agyspeak, including when resuming with `-c`.
@@ -40,6 +40,10 @@ Inside the chat:
 | `/new`             | start a fresh conversation                               |
 | `/id`, `/devices`  | conversation id, input devices                           |
 | `/sessions`        | list saved sessions                                      |
+| `/speech status`   | show loaded models and queued work                        |
+| `/speech load …`   | load Kokoro or Qwen in the background                     |
+| `/speech unload …` | unload one engine or all speech models                    |
+| `/speech stop`     | cancel current and queued speech                          |
 | `/help`, `/quit`   |                                                          |
 
 Recordings are 16 kHz mono WAV under `~/.cache/agyspeak/recordings/`
@@ -104,10 +108,13 @@ speaks ten languages. The 8-bit weights (~1 GB) download from `mlx-community`
 on first use. Lines from both engines can be mixed in one `narrate` script. Use
 Qwen for a few expressive lines and Kokoro for narration or long passages.
 
-Speech requests go to a persistent local worker over a Unix socket. MCP calls
-return immediately, and loaded Kokoro or Qwen models stay warm between calls.
-Only one request runs at a time; a new request cancels the old one.
-`unload_speech()` stops the worker and releases its model memory.
+Speech requests go over a private Unix socket to the running agyspeak harness.
+The harness itself owns the queue and loaded Kokoro or Qwen models, so MCP calls
+return immediately and models stay warm between calls. Only one speech request
+runs at a time; a new request cancels the old one. `/speech load`, `/speech
+unload`, `/speech stop`, and `/speech status` expose that lifecycle directly in
+the REPL. Exiting agyspeak stops playback, unloads the models, and removes the
+socket—there is no independent speech daemon left behind.
 
 Kokoro needs `espeak-ng` for words outside its dictionary (`brew install
 espeak-ng`). The model (~330 MB) downloads from Hugging Face on first use into
@@ -119,7 +126,9 @@ archive can be searched with tools such as `rg` or `jq`.
 The MCP also exposes `list_audio(kind="all", limit=10)` and
 `replay_audio(kind, audio_id="latest")`. They let the assistant discover and
 replay microphone recordings or generated speech without receiving arbitrary
-filesystem access.
+filesystem access. Speech and replay tools only work for an `agy` process
+launched by agyspeak, which inherits the harness socket; standalone `agy` never
+starts a background service on its own.
 
 ```sh
 agy mcp add agyspeak "$PWD/.venv/bin/agyspeak-mcp"

@@ -115,3 +115,39 @@ def test_voice_mode_notifies_persistence_after_state_changes(monkeypatch) -> Non
         ("am_echo", True),
         ("am_echo", False),
     ]
+
+
+def test_speech_commands_control_harness_models(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(cli.worker, "load", lambda engine, voice: calls.append(("load", engine, voice)))
+    monkeypatch.setattr(cli.player, "unload", lambda engine: calls.append(("unload", engine)))
+    monkeypatch.setattr(cli.player, "stop", lambda: True)
+
+    assert "loading kokoro" in cli._speech_command("load", "bm_fable")
+    assert "loading qwen" in cli._speech_command("load qwen", "bm_fable")
+    assert "unloading kokoro" in cli._speech_command("unload kokoro", "bm_fable")
+    assert "speech stopped" in cli._speech_command("stop", "bm_fable")
+    assert calls == [
+        ("load", "kokoro", "bm_fable"),
+        ("load", "qwen", "bm_fable"),
+        ("unload", "kokoro"),
+    ]
+
+
+def test_speech_status_shows_loaded_models_and_error(monkeypatch) -> None:
+    monkeypatch.setattr(
+        cli.worker,
+        "status",
+        lambda: {
+            "active": None,
+            "queued": 0,
+            "loaded": {"kokoro": ["a"], "qwen": []},
+            "last_error": "bad voice",
+        },
+    )
+
+    result = cli._speech_command("status", "af_heart")
+
+    assert "idle" in result
+    assert "kokoro a" in result
+    assert "last error" in result

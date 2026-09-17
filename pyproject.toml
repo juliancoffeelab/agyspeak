@@ -3,9 +3,10 @@ name = "agyspeak"
 version = "0.1.0"
 description = "Terminal voice chat with Gemini through the Antigravity CLI (agy)"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.13,<3.14"
 dependencies = [
-    "kokoro>=0.9.4",
+    "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
+    "kokoro @ git+https://github.com/hexgrad/kokoro@4b647d371e837e1f6e356bbbabc99b0c436f27bd",
     "markdown-it-py>=4.0.0",
     "mcp>=2.2.0",
     "mdit-py-plugins>=0.5.0",
@@ -29,6 +30,15 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/agyspeak"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.uv]
+# Misaki declares this optional spaCy transformer plugin, but its English G2P
+# uses en_core_web_sm with trf=False. Loading the unused plugin invokes the
+# deprecated TorchScript path on every Kokoro startup.
+exclude-dependencies = ["spacy-curated-transformers"]
 
 [dependency-groups]
 dev = [

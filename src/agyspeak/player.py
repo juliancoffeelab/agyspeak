@@ -1,4 +1,4 @@
-"""Speech request metadata and playback helpers used by the persistent worker."""
+"""Speech request metadata and playback helpers used by the harness service."""
 
 from __future__ import annotations
 
@@ -20,15 +20,15 @@ def stop() -> bool:
     return worker.stop()
 
 
-def unload() -> bool:
-    """Stop speech and terminate the worker so its model memory is released."""
+def unload(engine: str = "all") -> bool:
+    """Stop speech and release model memory owned by the harness."""
     from agyspeak import worker
 
-    return worker.shutdown()
+    return worker.unload(engine)
 
 
 def start(lines: list[dict], pause: float = 0.4) -> tuple[Path, float]:
-    """Queue a script with the speech worker; return its path and audio estimate."""
+    """Queue a script with the harness service; return its path and audio estimate."""
     tts.SPEECH_DIR.mkdir(parents=True, exist_ok=True)
     created = datetime.now()
     request_id = created.strftime("%Y%m%d-%H%M%S-%f")

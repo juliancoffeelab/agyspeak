@@ -64,3 +64,11 @@ def test_line_pause_overrides_default_and_cannot_be_negative() -> None:
     assert tts.pause_before({}, 0.4) == 0.4
     assert tts.pause_before({"pause_before": 0.2}, 0.4) == 0.2
     assert tts.pause_before({"pause_before": -1}, 0.4) == 0.0
+
+
+def test_qwen_registers_specific_transformers_config() -> None:
+    from transformers import AutoConfig
+
+    tts._register_qwen_transformers_config()
+
+    assert AutoConfig.for_model("qwen3_tts").model_type == "qwen3_tts"

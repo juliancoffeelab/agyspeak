@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import logging
 import os
 import queue
@@ -52,7 +53,11 @@ def _pipeline(lang_code: str):
             from kokoro import KModel, KPipeline  # slow import, keep it lazy
 
             snap = _snapshot(KOKORO_REPO)
-            model = KModel(config=str(snap / "config.json"), model=str(snap / "kokoro-v1_0.pth"))
+            model = KModel(
+                repo_id=KOKORO_REPO,
+                config=str(snap / "config.json"),
+                model=str(snap / "kokoro-v1_0.pth"),
+            ).eval()
             _pipelines[lang_code] = KPipeline(lang_code=lang_code, model=model, repo_id=KOKORO_REPO)
         return _pipelines[lang_code]
 
@@ -232,13 +237,65 @@ def _limit_render_threads() -> None:
 _qwen_models: dict[str, object] = {}
 
 
+def _register_qwen_transformers_config() -> None:
+    """Teach AutoTokenizer the checkpoint's actual model type."""
+    from transformers import AutoConfig, PreTrainedConfig
+
+    class Qwen3TTSConfig(PreTrainedConfig):
+        model_type = "qwen3_tts"
+
+    try:
+        AutoConfig.register(Qwen3TTSConfig.model_type, Qwen3TTSConfig)
+    except ValueError as exc:
+        if "already used" not in str(exc):
+            raise
+
+
 def _qwen(repo: str = QWEN_REPO):
     with _lock:
         if repo not in _qwen_models:
+            _register_qwen_transformers_config()
             from mlx_audio.tts.utils import load_model  # slow import, keep it lazy
 
             _qwen_models[repo] = load_model(str(_snapshot(repo)))
         return _qwen_models[repo]
+
+
+def load_model(engine: str, voice: str = DEFAULT_KOKORO_VOICE) -> None:
+    """Load one speech engine synchronously inside the harness."""
+    if engine == "kokoro":
+        _voice(voice)
+        _pipeline(voice[0] if voice[:1] in KOKORO_LANGS else "a")
+        return
+    if engine == "qwen":
+        _qwen()
+        return
+    raise ValueError(f"unknown speech engine {engine!r}")
+
+
+def loaded_models() -> dict[str, list[str]]:
+    """Describe speech models currently held in memory without waiting for a load."""
+    acquired = _lock.acquire(blocking=False)
+    try:
+        return {
+            "kokoro": sorted(_pipelines),
+            "qwen": sorted(_qwen_models),
+        }
+    finally:
+        if acquired:
+            _lock.release()
+
+
+def unload_models(engine: str = "all") -> None:
+    """Release cached speech models from this process."""
+    if engine not in {"all", "kokoro", "qwen"}:
+        raise ValueError(f"unknown speech engine {engine!r}")
+    with _lock:
+        if engine in {"all", "kokoro"}:
+            _pipelines.clear()
+        if engine in {"all", "qwen"}:
+            _qwen_models.clear()
+    gc.collect()
 
 
 def qwen_render(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import select
@@ -17,6 +18,7 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.application import run_in_terminal
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.patch_stdout import patch_stdout
 from rich.console import Console
 from rich.live import Live
 from rich.panel import Panel
@@ -50,6 +52,10 @@ HELP = r"""
   /devices          list input devices
   /voice [name]     show or select the Kokoro voice
   /voices           list available Kokoro voices
+  /speech status    show loaded models and queued work
+  /speech load [kokoro [voice]|qwen]
+  /speech unload [kokoro|qwen|all]
+  /speech stop      stop current and queued speech
   Tab               toggle automatic voice replies
   /help             this text
   /quit, /q         exit (ctrl+d also works)
@@ -111,6 +117,44 @@ class VoiceMode:
         except Exception as exc:
             return f"[yellow]could not narrate reply:[/yellow] {exc}"
         return None
+
+
+def _speech_command(arguments: str, voice: str) -> str:
+    """Run one harness speech-control command and return Rich-formatted output."""
+    parts = arguments.split()
+    action = parts[0] if parts else "status"
+    try:
+        if action == "status":
+            state = worker.status()
+            loaded = state["loaded"]
+            kokoro = ", ".join(loaded["kokoro"]) or "none"
+            qwen = ", ".join(loaded["qwen"]) or "none"
+            activity = state["active"] or "idle"
+            result = (
+                f"speech: [bold]{activity}[/bold] · queued {state['queued']} · "
+                f"kokoro {kokoro} · qwen {qwen}"
+            )
+            if state.get("last_error"):
+                result += f"\n[red]last error:[/red] {state['last_error']}"
+            return result
+        if action == "stop" and len(parts) == 1:
+            return "[dim]speech stopped[/dim]" if player.stop() else "[dim]nothing was playing[/dim]"
+        if action == "load" and len(parts) <= 3:
+            engine = parts[1] if len(parts) >= 2 else "kokoro"
+            if engine not in {"kokoro", "qwen"}:
+                raise ValueError(f"unknown speech engine {engine!r}")
+            selected_voice = parts[2] if len(parts) == 3 else voice
+            worker.load(engine, selected_voice)
+            return f"[dim]loading {engine} in the background[/dim]"
+        if action == "unload" and len(parts) <= 2:
+            engine = parts[1] if len(parts) == 2 else "all"
+            if engine not in {"kokoro", "qwen", "all"}:
+                raise ValueError(f"unknown speech engine {engine!r}")
+            player.unload(engine)
+            return f"[dim]unloading {engine} in the background[/dim]"
+    except Exception as exc:
+        return f"[red]speech command failed:[/red] {exc}"
+    return "[yellow]usage:[/yellow] /speech status|stop|load [kokoro [voice]|qwen]|unload [kokoro|qwen|all]"
 
 
 def _save_session(client: AgyClient, voice_mode: VoiceMode | None = None) -> None:
@@ -332,6 +376,14 @@ def main(
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1)
 
+    speech_service = worker.HarnessSpeechService()
+    try:
+        speech_service.start()
+    except Exception as exc:
+        console.print(f"[red]could not start speech service:[/red] {exc}")
+        raise typer.Exit(1)
+    atexit.register(speech_service.close)
+
     last = _load_session()
     model_given = "--model" in sys.argv or "-m" in sys.argv
     voice_given = any(arg == "--voice" or arg.startswith("--voice=") for arg in sys.argv[1:])
@@ -387,7 +439,10 @@ def main(
     last_clip: Path | None = None
     while True:
         try:
-            line = session.prompt("› ").strip()
+            # Keep diagnostics from background model loading above the active
+            # prompt instead of letting them overwrite terminal UI state.
+            with patch_stdout(raw=True):
+                line = session.prompt("› ").strip()
         except (EOFError, KeyboardInterrupt):
             console.print("[dim]bye[/dim]")
             break
@@ -447,13 +502,15 @@ def main(
                     console.print(f"voice: [bold]{voice_mode.voice}[/bold] · mode {state}")
             case "/voices":
                 console.print("  ".join(tts.kokoro_voices()))
+            case "/speech":
+                console.print(_speech_command(rest, voice_mode.voice))
             case _ if cmd.startswith("/"):
                 console.print(f"[yellow]unknown command {cmd}[/yellow] (try /help)")
             case _:
                 _send(client, line, None, voice_mode)
 
-    if voice_mode.enabled:
-        player.unload()
+    speech_service.close()
+    atexit.unregister(speech_service.close)
     if client.conversation_id:
         _log_session(client)
         console.print(
