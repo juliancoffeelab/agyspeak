@@ -77,3 +77,41 @@ def test_recording_input_accepts_ctrl_c_byte(monkeypatch) -> None:
     monkeypatch.setattr(cli.os, "read", lambda fd, size: b"\x03")
 
     assert cli._recording_input(42) == "cancel"
+
+
+def test_voice_mode_warms_narrates_and_unloads(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(cli.worker, "warm", lambda voice: calls.append(("warm", voice)))
+    monkeypatch.setattr(cli.player, "start", lambda lines, pause: calls.append(("start", lines, pause)))
+    monkeypatch.setattr(cli.player, "unload", lambda: calls.append(("unload",)))
+
+    mode = cli.VoiceMode(voice="bm_fable")
+    mode.toggle()
+    mode.narrate("**Hello.** How are you?")
+    mode.toggle()
+
+    assert calls[0] == ("warm", "bm_fable")
+    assert calls[1][0] == "start"
+    assert [line["text"] for line in calls[1][1]] == ["Hello. How are you?"]
+    assert calls[1][1][0]["pause_before"] == 0.0
+    assert calls[1][2] == 0.0
+    assert calls[2] == ("unload",)
+
+
+def test_voice_mode_notifies_persistence_after_state_changes(monkeypatch) -> None:
+    states = []
+    monkeypatch.setattr(cli.worker, "warm", lambda voice: None)
+    monkeypatch.setattr(cli.player, "unload", lambda: None)
+    monkeypatch.setattr(cli.tts, "kokoro_voices", lambda: ["af_heart", "am_echo"])
+    mode = cli.VoiceMode()
+    mode.on_change = lambda: states.append((mode.voice, mode.enabled))
+
+    mode.toggle()
+    mode.select("am_echo")
+    mode.toggle()
+
+    assert states == [
+        ("af_heart", True),
+        ("am_echo", True),
+        ("am_echo", False),
+    ]

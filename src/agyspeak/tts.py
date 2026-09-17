@@ -62,6 +62,17 @@ def warm_up(lang_code: str = "a") -> None:
     threading.Thread(target=_pipeline, args=(lang_code,), daemon=True).start()
 
 
+def warm_voice(voice: str = DEFAULT_KOKORO_VOICE) -> None:
+    """Validate a Kokoro voice and load its language pipeline in the background."""
+    _voice(voice)
+    warm_up(voice[0] if voice[:1] in KOKORO_LANGS else "a")
+
+
+def kokoro_voices() -> list[str]:
+    """Return locally available Kokoro voice ids."""
+    return sorted(path.stem for path in (_snapshot(KOKORO_REPO) / "voices").glob("*.pt"))
+
+
 def _voice(voice: str) -> str:
     """Resolve a voice id, or a blend like "af_heart+bf_emma", to local voice files."""
     voices_dir = _snapshot(KOKORO_REPO) / "voices"
@@ -124,6 +135,11 @@ def _render_line(line: dict) -> np.ndarray:
     return kokoro_render(line["text"], voice, float(line.get("speed") or 1.0))
 
 
+def pause_before(line: dict, default: float) -> float:
+    """Return a non-negative pause before a script line."""
+    return max(0.0, float(line.get("pause_before", default)))
+
+
 def kokoro_narrate(
     lines: list[dict],
     pause: float = 0.4,
@@ -133,13 +149,12 @@ def kokoro_narrate(
     """Render several {text, voice, speed} segments into one WAV with pauses between."""
     if not lines:
         raise RuntimeError("no lines to narrate")
-    gap = np.zeros(int(KOKORO_RATE * pause), dtype=np.float32)
     parts: list[np.ndarray] = []
-    for line in lines:
+    for index, line in enumerate(lines):
         if stop_event and stop_event.is_set():
             raise SpeechCancelled("speech cancelled")
         if parts:
-            parts.append(gap)
+            parts.append(np.zeros(int(KOKORO_RATE * pause_before(line, pause)), dtype=np.float32))
         parts.append(_render_line(line))
     if stop_event and stop_event.is_set():
         raise SpeechCancelled("speech cancelled")
@@ -161,7 +176,6 @@ def kokoro_narrate_streaming(
     """
     if not lines:
         raise RuntimeError("no lines to narrate")
-    gap = np.zeros(int(KOKORO_RATE * pause), dtype=np.float32)
     ready: queue.Queue[tuple[np.ndarray, Path] | Exception | None] = queue.Queue()
     SPEECH_DIR.mkdir(parents=True, exist_ok=True)
     if output_path is None:
@@ -178,6 +192,8 @@ def kokoro_narrate_streaming(
                     raise SpeechCancelled("speech cancelled")
                 audio = _render_line(line)
                 if i < len(lines) - 1:
+                    seconds = pause_before(lines[i + 1], pause)
+                    gap = np.zeros(int(KOKORO_RATE * seconds), dtype=np.float32)
                     audio = np.concatenate([audio, gap])
                 part = SPEECH_DIR / f"seg_{stamp}_{i:03d}.wav"
                 sf.write(part, audio, KOKORO_RATE, subtype="PCM_16")

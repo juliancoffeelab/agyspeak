@@ -1,20 +1,30 @@
-"""Make common model-generated LaTeX readable in a plain terminal."""
+"""Render Markdown and common LaTeX cleanly in a terminal or as speech."""
 
 from __future__ import annotations
 
 import re
 import unicodedata
+from dataclasses import dataclass
 
+from markdown_it import MarkdownIt
+from markdown_it.token import Token
+from mdit_py_plugins.dollarmath import dollarmath_plugin
+from mdit_py_plugins.texmath import texmath_plugin
 from pylatexenc.latex2text import LatexNodes2Text
-
-_DOLLAR_DISPLAY = re.compile(r"\$\$(.+?)\$\$", re.DOTALL)
-_DOLLAR_INLINE = re.compile(r"(?<!\\)(?<!\$)\$(?!\$)([^$\n]+?)(?<!\\)\$(?!\$)")
-_BRACKET_DISPLAY = re.compile(r"\\\[(.+?)\\\]", re.DOTALL)
-_PAREN_INLINE = re.compile(r"\\\((.+?)\\\)")
-_CODE_SPAN = re.compile(r"(`+)(.*?)\1", re.DOTALL)
+from rich.markdown import Markdown
 
 _CONVERTER = LatexNodes2Text()
 _OPERATORS = "→←↔⇒⇐⇔⟶⟵≈≠≤≥×·±="
+
+
+def _parser() -> MarkdownIt:
+    return (
+        MarkdownIt()
+        .enable("strikethrough")
+        .enable("table")
+        .use(dollarmath_plugin, allow_digits=False, double_inline=True)
+        .use(texmath_plugin, delimiters="brackets")
+    )
 
 
 def _plain_math(source: str) -> str:
@@ -34,29 +44,92 @@ def _plain_math(source: str) -> str:
     return text.strip()
 
 
-def for_terminal(markdown: str) -> str:
-    """Replace display-math blocks with readable plain text and Unicode."""
-    code_spans: list[str] = []
+def _convert_inline_math(token: Token) -> None:
+    for child in token.children or []:
+        if child.type == "math_inline":
+            child.type = "text"
+            child.tag = ""
+            child.markup = ""
+            child.content = _plain_math(child.content)
+        _convert_inline_math(child)
 
-    def protect_code(match: re.Match) -> str:
-        code_spans.append(match.group(0))
-        return f"\x00AGYSPEAK_CODE_{len(code_spans) - 1}\x00"
 
-    def display(match: re.Match) -> str:
-        return f"\n\n{_plain_math(match.group(1))}\n\n"
+def terminal_tokens(markdown: str) -> list[Token]:
+    """Parse Markdown and replace math nodes with terminal-safe text nodes."""
+    result: list[Token] = []
+    for token in _parser().parse(markdown):
+        if token.type.startswith("math_block"):
+            result.extend(
+                [
+                    Token("paragraph_open", "p", 1),
+                    Token(
+                        "inline",
+                        "",
+                        0,
+                        children=[Token("text", "", 0, content=_plain_math(token.content))],
+                    ),
+                    Token("paragraph_close", "p", -1),
+                ]
+            )
+            continue
+        _convert_inline_math(token)
+        result.append(token)
+    return result
 
-    def inline(match: re.Match) -> str:
-        source = match.group(1)
-        # Avoid treating currency ranges such as "$5 to $10" as math.
-        if source.lstrip()[:1].isdigit() and not re.search(r"[\\_^{}=]", source):
-            return match.group(0)
-        return _plain_math(source)
 
-    markdown = _CODE_SPAN.sub(protect_code, markdown)
-    markdown = _DOLLAR_DISPLAY.sub(display, markdown)
-    markdown = _BRACKET_DISPLAY.sub(display, markdown)
-    markdown = _PAREN_INLINE.sub(lambda match: _plain_math(match.group(1)), markdown)
-    markdown = _DOLLAR_INLINE.sub(inline, markdown)
-    for index, code in enumerate(code_spans):
-        markdown = markdown.replace(f"\x00AGYSPEAK_CODE_{index}\x00", code)
-    return markdown
+class TerminalMarkdown(Markdown):
+    """Rich Markdown with structural LaTeX parsing and plain-text math output."""
+
+    def __init__(self, markup: str, **kwargs) -> None:  # noqa: ANN003
+        super().__init__(markup, **kwargs)
+        self.parsed = terminal_tokens(markup)
+
+
+def _inline_text(tokens: list[Token]) -> str:
+    parts: list[str] = []
+    for token in tokens:
+        if token.type == "math_inline":
+            parts.append(_plain_math(token.content))
+        elif token.type in {"text", "code_inline"}:
+            parts.append(token.content)
+        elif token.type in {"softbreak", "hardbreak"}:
+            parts.append(" ")
+        elif token.type == "image":
+            parts.append(_inline_text(token.children or []) or token.content)
+        elif token.children:
+            parts.append(_inline_text(token.children))
+    return "".join(parts)
+
+
+@dataclass(frozen=True)
+class TextBlock:
+    kind: str
+    text: str
+
+
+def parsed_text_blocks(markdown: str) -> list[TextBlock]:
+    """Extract typed prose blocks from parsed Markdown, omitting source code."""
+    blocks: list[TextBlock] = []
+    kind = "paragraph"
+    for token in _parser().parse(markdown):
+        if token.type == "heading_open":
+            kind = "heading"
+            continue
+        if token.type == "hr":
+            blocks.append(TextBlock("break", ""))
+            continue
+        if token.type == "inline":
+            text = _inline_text(token.children or []).strip()
+        elif token.type.startswith("math_block"):
+            text = _plain_math(token.content)
+        else:
+            continue
+        if text:
+            blocks.append(TextBlock(kind, text))
+        kind = "paragraph"
+    return blocks
+
+
+def text_blocks(markdown: str) -> list[str]:
+    """Extract spoken prose strings from parsed Markdown."""
+    return [block.text for block in parsed_text_blocks(markdown) if block.text]

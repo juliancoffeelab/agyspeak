@@ -58,3 +58,9 @@ def test_explicit_qwen_defaults_to_ryan(monkeypatch: pytest.MonkeyPatch) -> None
 
 def test_auto_engine_uses_voice_to_select_qwen() -> None:
     assert tts.line_engine({"voice": "Ryan", "engine": "auto"}) == "qwen"
+
+
+def test_line_pause_overrides_default_and_cannot_be_negative() -> None:
+    assert tts.pause_before({}, 0.4) == 0.4
+    assert tts.pause_before({"pause_before": 0.2}, 0.4) == 0.2
+    assert tts.pause_before({"pause_before": -1}, 0.4) == 0.0

@@ -8,21 +8,25 @@ import select
 import subprocess
 import sys
 import time
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import typer
 from prompt_toolkit import PromptSession
+from prompt_toolkit.application import run_in_terminal
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
 from rich.console import Console
 from rich.live import Live
-from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
 
 from agyspeak import audio as audio_mod
+from agyspeak import player, tts, worker
 from agyspeak.backend import DEFAULT_MODEL, AgyClient, AgyNotFound, Turn
-from agyspeak.terminal_math import for_terminal
+from agyspeak.speech_text import narration_chunks
+from agyspeak.terminal_math import TerminalMarkdown
 
 app = typer.Typer(add_completion=False, rich_markup_mode="rich")
 console = Console()
@@ -44,17 +48,81 @@ HELP = r"""
   /id               print the current conversation id
   /sessions         list saved sessions (resume with `agyspeak --conversation <id>`)
   /devices          list input devices
+  /voice [name]     show or select the Kokoro voice
+  /voices           list available Kokoro voices
+  Tab               toggle automatic voice replies
   /help             this text
   /quit, /q         exit (ctrl+d also works)
 
 Anything else is sent as a text message."""
 
 
-def _save_session(client: AgyClient) -> None:
+@dataclass
+class VoiceMode:
+    voice: str = tts.DEFAULT_KOKORO_VOICE
+    enabled: bool = False
+    on_change: Callable[[], None] | None = field(default=None, repr=False)
+
+    def _changed(self) -> None:
+        if self.on_change:
+            self.on_change()
+
+    def toggle(self) -> str:
+        if self.enabled:
+            player.unload()
+            self.enabled = False
+            self._changed()
+            return "[dim]voice mode off · speech model unloaded[/dim]"
+        try:
+            worker.warm(self.voice)
+        except Exception as exc:
+            return f"[red]could not start voice mode:[/red] {exc}"
+        self.enabled = True
+        self._changed()
+        return f"[green]voice mode on[/green] · Kokoro [bold]{self.voice}[/bold]"
+
+    def select(self, voice: str) -> str:
+        if voice not in tts.kokoro_voices():
+            return f"[red]unknown Kokoro voice {voice!r}[/red] (try /voices)"
+        try:
+            if self.enabled:
+                worker.warm(voice)
+        except Exception as exc:
+            return f"[red]could not load {voice!r}:[/red] {exc}"
+        self.voice = voice
+        self._changed()
+        return f"voice: [bold]{voice}[/bold]"
+
+    def narrate(self, markdown: str) -> str | None:
+        if not self.enabled:
+            return None
+        lines = [
+            {
+                "text": chunk.text,
+                "voice": self.voice,
+                "pause_before": chunk.pause_before,
+            }
+            for chunk in narration_chunks(markdown)
+        ]
+        if not lines:
+            return None
+        try:
+            player.start(lines, pause=0.0)
+        except Exception as exc:
+            return f"[yellow]could not narrate reply:[/yellow] {exc}"
+        return None
+
+
+def _save_session(client: AgyClient, voice_mode: VoiceMode | None = None) -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    LAST_SESSION.write_text(
-        json.dumps({"conversation_id": client.conversation_id, "model": client.model})
-    )
+    state = _load_session()
+    state["model"] = client.model
+    if client.conversation_id:
+        state["conversation_id"] = client.conversation_id
+    if voice_mode:
+        state["voice"] = voice_mode.voice
+        state["voice_mode"] = voice_mode.enabled
+    LAST_SESSION.write_text(json.dumps(state))
 
 
 def _load_sessions() -> list[dict]:
@@ -189,7 +257,7 @@ def _render_turn(turn: Turn, model: str) -> None:
             f"[yellow]agy auto-denied tool use ({names}). "
             "Start with --yolo to let it run tools.[/yellow]"
         )
-    body = for_terminal(turn.response.strip())
+    body = turn.response.strip()
     if not body:
         console.print("[red]empty response[/red]" + (f" (status {turn.status})" if turn.status else ""))
         return
@@ -197,10 +265,12 @@ def _render_turn(turn: Turn, model: str) -> None:
     subtitle = f"{model} · {turn.duration:.0f}s"
     if usage.get("total_tokens"):
         subtitle += f" · {usage['total_tokens']} tok"
-    console.print(Panel(Markdown(body), title="gemini", subtitle=subtitle, border_style="blue"))
+    console.print(
+        Panel(TerminalMarkdown(body), title="gemini", subtitle=subtitle, border_style="blue")
+    )
 
 
-def _send(client: AgyClient, text: str, clip: Path | None) -> None:
+def _send(client: AgyClient, text: str, clip: Path | None, voice_mode: VoiceMode) -> None:
     label = "voice" if clip else "text"
     is_first = client.conversation_id is None
     with console.status(f"[bold blue]thinking[/bold blue] [dim]({label})[/dim]") as status:
@@ -216,7 +286,9 @@ def _send(client: AgyClient, text: str, clip: Path | None) -> None:
 
         turn = client.send(text, clip, on_event=on_event)
     _render_turn(turn, client.model)
-    _save_session(client)
+    if speech_error := voice_mode.narrate(turn.response):
+        console.print(speech_error)
+    _save_session(client, voice_mode)
     if is_first:
         _log_session(client, text or "(voice message)")
 
@@ -244,6 +316,7 @@ def main(
     list_sessions: bool = typer.Option(False, "--list", "-l", help="list saved sessions and exit"),
     system: str | None = typer.Option(None, "--system", help="replace the preamble sent on a new conversation"),
     no_system: bool = typer.Option(False, "--no-system", help="send no preamble at all"),
+    voice: str = typer.Option(tts.DEFAULT_KOKORO_VOICE, "--voice", help="Kokoro voice for voice mode"),
 ) -> None:
     """Voice + text chat with Gemini via the Antigravity CLI."""
     if list_sessions:
@@ -259,14 +332,15 @@ def main(
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1)
 
+    last = _load_session()
     model_given = "--model" in sys.argv or "-m" in sys.argv
+    voice_given = any(arg == "--voice" or arg.startswith("--voice=") for arg in sys.argv[1:])
     if conversation:
         client.conversation_id = _resolve_conversation(conversation)
         entry = next((e for e in _load_sessions() if e["id"] == client.conversation_id), None)
         if entry and not model_given:
             client.model = entry["model"]
     elif resume:
-        last = _load_session()
         if last.get("conversation_id"):
             client.conversation_id = last["conversation_id"]
             if not model_given and last.get("model"):
@@ -275,9 +349,21 @@ def main(
             console.print("[yellow]no previous session to continue[/yellow]")
 
     STATE_DIR.mkdir(parents=True, exist_ok=True)
+    saved_voice = str(last.get("voice") or voice)
+    voice_mode = VoiceMode(voice=voice if voice_given else saved_voice)
+    voice_mode.on_change = lambda: _save_session(client, voice_mode)
+    restored_voice_message = ""
+    if last.get("voice_mode"):
+        restored_voice_message = voice_mode.toggle()
+    elif voice_given:
+        _save_session(client, voice_mode)
     bindings = KeyBindings()
 
     bindings.add("enter")(_submit_or_record)
+
+    @bindings.add("tab")
+    def _toggle_voice(_event) -> None:  # noqa: ANN001
+        run_in_terminal(lambda: console.print(voice_mode.toggle()))
 
     session: PromptSession[str] = PromptSession(
         history=FileHistory(str(HISTORY)),
@@ -289,11 +375,14 @@ def main(
         Panel(
             f"model [bold]{client.model}[/bold]"
             + (f" · resuming [dim]{client.conversation_id}[/dim]" if client.conversation_id else "")
-            + "\n[dim]Enter to talk · /help for commands[/dim]",
+            + f"\n[dim]Enter to talk · voice {('on' if voice_mode.enabled else 'off')} "
+            f"({voice_mode.voice}) · Tab toggles · /help for commands[/dim]",
             title="agyspeak",
             border_style="green",
         )
     )
+    if restored_voice_message and not voice_mode.enabled:
+        console.print(restored_voice_message)
 
     last_clip: Path | None = None
     while True:
@@ -324,7 +413,7 @@ def main(
                     except (EOFError, KeyboardInterrupt):
                         console.print("[dim]not sent[/dim]")
                         continue
-                _send(client, note, clip)
+                _send(client, note, clip, voice_mode)
             case "/last":
                 if last_clip is None:
                     latest = audio_mod.RECORDINGS_DIR / "latest.wav"
@@ -332,7 +421,7 @@ def main(
                 if last_clip is None:
                     console.print("[yellow]no recording yet[/yellow]")
                     continue
-                _send(client, rest, last_clip)
+                _send(client, rest, last_clip, voice_mode)
             case "/model":
                 if rest:
                     client.model = rest
@@ -350,11 +439,21 @@ def main(
                 for idx, name in audio_mod.list_input_devices():
                     marker = "*" if idx == device else " "
                     console.print(f" {marker} {idx}: {name}")
+            case "/voice":
+                if rest:
+                    console.print(voice_mode.select(rest))
+                else:
+                    state = "on" if voice_mode.enabled else "off"
+                    console.print(f"voice: [bold]{voice_mode.voice}[/bold] · mode {state}")
+            case "/voices":
+                console.print("  ".join(tts.kokoro_voices()))
             case _ if cmd.startswith("/"):
                 console.print(f"[yellow]unknown command {cmd}[/yellow] (try /help)")
             case _:
-                _send(client, line, None)
+                _send(client, line, None, voice_mode)
 
+    if voice_mode.enabled:
+        player.unload()
     if client.conversation_id:
         _log_session(client)
         console.print(

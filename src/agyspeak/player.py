@@ -35,7 +35,9 @@ def start(lines: list[dict], pause: float = 0.4) -> tuple[Path, float]:
     script = tts.SPEECH_DIR / f"speech_{request_id}.json"
     audio = script.with_suffix(".wav")
     words = sum(len(str(line.get("text", "")).split()) for line in lines)
-    estimate = words / WORDS_PER_SECOND + pause * max(len(lines) - 1, 0)
+    estimate = words / WORDS_PER_SECOND + sum(
+        tts.pause_before(line, pause) for line in lines[1:]
+    )
     script.write_text(
         json.dumps(
             {

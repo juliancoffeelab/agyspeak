@@ -20,6 +20,13 @@ uv run agyspeak --conversation 2bbead17   # resume one by id (prefix is fine)
 uv run agyspeak --yolo               # let agy run tools without asking
 ```
 
+Press Tab at an empty prompt to toggle full voice mode. While enabled, every
+model reply is cleaned of Markdown and spoken asynchronously with Kokoro; Tab
+again unloads the speech worker and releases the model. Use `/voice <name>` to
+switch voices or `/voices` to list them. `--voice bm_fable` selects the startup
+voice without enabling speech. The selected voice and on/off state are restored
+after restarting agyspeak, including when resuming with `-c`.
+
 Inside the chat:
 
 | input              | effect                                                   |

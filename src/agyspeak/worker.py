@@ -88,6 +88,19 @@ def shutdown() -> bool:
     return True
 
 
+def warm(voice: str) -> None:
+    """Start loading a Kokoro voice in the persistent worker."""
+    ensure_running()
+    response = _request({"command": "warm", "voice": voice})
+    if not response.get("ok") and response.get("error") == "unknown command":
+        # Replace a worker started by an older agyspeak process.
+        shutdown()
+        ensure_running()
+        response = _request({"command": "warm", "voice": voice})
+    if not response.get("ok"):
+        raise RuntimeError(response.get("error", "speech worker rejected warm-up"))
+
+
 class _Jobs:
     def __init__(self) -> None:
         self.pending: queue.Queue[dict] = queue.Queue()
@@ -204,6 +217,9 @@ def serve() -> None:
                         payload = json.loads(connection.makefile().readline())
                         command = payload.get("command")
                         if command == "ping":
+                            _reply(connection, {"ok": True})
+                        elif command == "warm":
+                            tts.warm_voice(str(payload.get("voice") or tts.DEFAULT_KOKORO_VOICE))
                             _reply(connection, {"ok": True})
                         elif command in {"play", "replay"}:
                             key = "script" if command == "play" else "path"
