@@ -12,6 +12,9 @@ from pathlib import Path
 
 DEFAULT_MODEL = "gemini-3.7-flash-high"
 DEFAULT_VOICE_PROMPT = "Listen to this voice message and respond to it."
+# agy has an unavoidable five-minute default and treats zero/negative values as
+# immediate expiry. This is Go's largest whole-second duration (~292 years).
+UNBOUNDED_PRINT_TIMEOUT = "2562047h47m16s"
 DEFAULT_PREAMBLE = """\
 You are a general multimodal assistant talking with the user in a terminal chat. \
 This is not a coding session. The user may type or send voice recordings, and you \
@@ -49,7 +52,6 @@ class AgyClient:
     effort: str | None = None
     yolo: bool = False
     conversation_id: str | None = None
-    timeout: str = "5m"
     binary: str = "agy"
     preamble: str | None = DEFAULT_PREAMBLE
 
@@ -68,7 +70,7 @@ class AgyClient:
             "--output-format",
             "stream-json",
             "--print-timeout",
-            self.timeout,
+            UNBOUNDED_PRINT_TIMEOUT,
             "--disable-slash-commands",
         ]
         if self.effort:
