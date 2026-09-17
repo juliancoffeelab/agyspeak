@@ -11,3 +11,6 @@ wheels/
 
 # secrets
 .env
+
+# Local notes
+/findings.md
