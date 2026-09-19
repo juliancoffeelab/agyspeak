@@ -29,15 +29,22 @@ def unload(engine: str = "all") -> bool:
 
 def start(lines: list[dict], pause: float = 0.4) -> tuple[Path, float]:
     """Queue a script with the harness service; return its path and audio estimate."""
+    def estimate_duration() -> float:
+        duration = 0.0
+        for index, line in enumerate(lines):
+            words = len(str(line.get("text", "")).split())
+            speed = max(0.1, float(line.get("speed") or 1.0))
+            duration += words / (WORDS_PER_SECOND * speed)
+            if index:
+                duration += tts.pause_before(line, pause)
+        return duration
+
     tts.SPEECH_DIR.mkdir(parents=True, exist_ok=True)
     created = datetime.now()
     request_id = created.strftime("%Y%m%d-%H%M%S-%f")
     script = tts.SPEECH_DIR / f"speech_{request_id}.json"
     audio = script.with_suffix(".wav")
-    words = sum(len(str(line.get("text", "")).split()) for line in lines)
-    estimate = words / WORDS_PER_SECOND + sum(
-        tts.pause_before(line, pause) for line in lines[1:]
-    )
+    estimate = estimate_duration()
     script.write_text(
         json.dumps(
             {

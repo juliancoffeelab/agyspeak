@@ -17,6 +17,9 @@ import soundfile as sf
 SPEECH_DIR = Path.home() / ".cache" / "agyspeak" / "speech"
 KOKORO_REPO = "hexgrad/Kokoro-82M"
 KOKORO_RATE = 24_000
+EDGE_SILENCE_THRESHOLD = 0.001
+EDGE_SILENCE_KEEP_SECONDS = 0.04
+STREAM_START_BUFFER_SECONDS = 5.0
 DEFAULT_KOKORO_VOICE = "af_heart"
 DEFAULT_SAY_VOICE = "Samantha"
 
@@ -33,6 +36,10 @@ _lock = threading.Lock()
 
 
 class SpeechCancelled(RuntimeError):
+    pass
+
+
+class NoAudioError(RuntimeError):
     pass
 
 
@@ -96,7 +103,7 @@ def kokoro_render(text: str, voice: str = DEFAULT_KOKORO_VOICE, speed: float = 1
     pipe = _pipeline(lang_code)
     chunks = [np.asarray(audio) for _, _, audio in pipe(text, voice=_voice(voice), speed=speed)]
     if not chunks:
-        raise RuntimeError("kokoro produced no audio")
+        raise NoAudioError("kokoro produced no audio")
     return np.concatenate(chunks)
 
 
@@ -125,6 +132,16 @@ def line_engine(line: dict) -> str:
 
 def _render_line(line: dict) -> np.ndarray:
     """Render one script line; everything is normalised to KOKORO_RATE."""
+    def trim_edge_silence(audio: np.ndarray) -> np.ndarray:
+        """Trim backend padding while retaining a short cushion."""
+        active = np.flatnonzero(np.abs(audio) >= EDGE_SILENCE_THRESHOLD)
+        if not len(active):
+            return audio
+        keep = int(KOKORO_RATE * EDGE_SILENCE_KEEP_SECONDS)
+        start = max(0, int(active[0]) - keep)
+        end = min(len(audio), int(active[-1]) + keep + 1)
+        return audio[start:end]
+
     voice = line.get("voice") or DEFAULT_KOKORO_VOICE
     engine = line_engine(line)
     if engine == "qwen":
@@ -136,8 +153,24 @@ def _render_line(line: dict) -> np.ndarray:
         )
         audio = resample(audio, rate, KOKORO_RATE)
         speed = float(line.get("speed") or 1.0)
-        return audio if speed == 1.0 else resample(audio, int(KOKORO_RATE * speed), KOKORO_RATE)
-    return kokoro_render(line["text"], voice, float(line.get("speed") or 1.0))
+        audio = audio if speed == 1.0 else resample(
+            audio, int(KOKORO_RATE * speed), KOKORO_RATE
+        )
+        return trim_edge_silence(audio)
+    return trim_edge_silence(
+        kokoro_render(line["text"], voice, float(line.get("speed") or 1.0))
+    )
+
+
+def _render_or_warn(line: dict) -> np.ndarray | None:
+    try:
+        return _render_line(line)
+    except NoAudioError as exc:
+        text = str(line.get("text") or "")
+        logging.getLogger(__name__).warning(
+            "Skipping unrenderable speech segment %r: %s", text[:80], exc
+        )
+        return None
 
 
 def pause_before(line: dict, default: float) -> float:
@@ -158,11 +191,16 @@ def kokoro_narrate(
     for index, line in enumerate(lines):
         if stop_event and stop_event.is_set():
             raise SpeechCancelled("speech cancelled")
+        audio = _render_or_warn(line)
+        if audio is None:
+            continue
         if parts:
             parts.append(np.zeros(int(KOKORO_RATE * pause_before(line, pause)), dtype=np.float32))
-        parts.append(_render_line(line))
+        parts.append(audio)
     if stop_event and stop_event.is_set():
         raise SpeechCancelled("speech cancelled")
+    if not parts:
+        raise NoAudioError("speech produced no audio")
     return save(np.concatenate(parts), output_path)
 
 
@@ -195,7 +233,9 @@ def kokoro_narrate_streaming(
             for i, line in enumerate(lines):
                 if stop_event and stop_event.is_set():
                     raise SpeechCancelled("speech cancelled")
-                audio = _render_line(line)
+                audio = _render_or_warn(line)
+                if audio is None:
+                    continue
                 if i < len(lines) - 1:
                     seconds = pause_before(lines[i + 1], pause)
                     gap = np.zeros(int(KOKORO_RATE * seconds), dtype=np.float32)
@@ -211,10 +251,34 @@ def kokoro_narrate_streaming(
     renderer = threading.Thread(target=render_all, daemon=True)
     renderer.start()
     parts: list[np.ndarray] = []
+    buffered: list[tuple[np.ndarray, Path]] = []
+    buffered_seconds = 0.0
+    finished = False
     try:
-        while (item := ready.get()) is not None:
+        # A heading can be much shorter than the segment rendered behind it.
+        # Hold a few seconds of ready audio before starting, then let rendering
+        # continue concurrently with playback.
+        while buffered_seconds < STREAM_START_BUFFER_SECONDS:
+            item = ready.get()
+            if item is None:
+                finished = True
+                break
             if isinstance(item, Exception):
                 raise item
+            buffered.append(item)
+            buffered_seconds += len(item[0]) / KOKORO_RATE
+
+        while buffered or not finished:
+            if buffered:
+                item = buffered.pop(0)
+            else:
+                queued = ready.get()
+                if queued is None:
+                    finished = True
+                    continue
+                if isinstance(queued, Exception):
+                    raise queued
+                item = queued
             if stop_event and stop_event.is_set():
                 raise SpeechCancelled("speech cancelled")
             audio, part = item
@@ -224,6 +288,8 @@ def kokoro_narrate_streaming(
         renderer.join()
         for part in SPEECH_DIR.glob(f"seg_{stamp}_*.wav"):
             part.unlink(missing_ok=True)
+    if not parts:
+        raise NoAudioError("speech produced no audio")
     return save(np.concatenate(parts), output_path)
 
 
@@ -319,7 +385,7 @@ def qwen_render(
         chunks.append(np.asarray(result.audio, dtype=np.float32))
         rate = int(getattr(result, "sample_rate", rate) or rate)
     if not chunks:
-        raise RuntimeError("qwen produced no audio")
+        raise NoAudioError("qwen produced no audio")
     return np.concatenate(chunks), rate
 
 

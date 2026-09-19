@@ -13,7 +13,8 @@ _SUBSCRIPTED_CAPITAL = re.compile(r"(?<!\w)([A-Z])_([0-9]+)(?!\w)")
 _ISOLATED_CAPITAL = re.compile(r"(?<!\w)([B-HJ-NP-TV-Z])(?!\w)")
 _SQUARED = re.compile(r"\^2(?!\w)")
 _CUBED = re.compile(r"\^3(?!\w)")
-SECTION_PAUSE = 0.35
+_SPEECH_BOUNDARY = re.compile(r"(?<=[.!?…:;])\s+")
+NARRATION_CHUNK_LIMIT = 280
 
 
 @dataclass(frozen=True)
@@ -110,32 +111,44 @@ def for_speech(markdown: str) -> str:
     return "\n\n".join(part for part in paragraphs if part)
 
 
-def narration_chunks(markdown: str, limit: int = 1200) -> list[SpeechChunk]:
-    """Keep Markdown blocks intact and pause only at section boundaries."""
+def narration_chunks(
+    markdown: str, limit: int = NARRATION_CHUNK_LIMIT
+) -> list[SpeechChunk]:
+    """Keep Markdown blocks distinct and split long ones near punctuation."""
+    def split_spoken(text: str) -> list[str]:
+        """Pack sentence-like units, falling back to words for oversized ones."""
+        units: list[str] = []
+        for sentence in _SPEECH_BOUNDARY.split(text):
+            if len(sentence) <= limit:
+                units.append(sentence)
+                continue
+            words = sentence.split()
+            current: list[str] = []
+            for word in words:
+                if current and len(" ".join((*current, word))) > limit:
+                    units.append(" ".join(current))
+                    current = []
+                current.append(word)
+            if current:
+                units.append(" ".join(current))
+
+        chunks: list[str] = []
+        for unit in units:
+            combined = f"{chunks[-1]} {unit}" if chunks else unit
+            if chunks and len(combined) <= limit:
+                chunks[-1] = combined
+            else:
+                chunks.append(unit)
+        return chunks
+
     result: list[SpeechChunk] = []
-    section_break = False
     for block in parsed_text_blocks(markdown):
         if block.kind == "break":
-            section_break = True
             continue
         spoken = normalize_for_speech(block.text)
         if not spoken:
             continue
-        pause = SECTION_PAUSE if section_break or block.kind == "heading" else 0.0
-        section_break = False
-        if len(spoken) <= limit:
-            result.append(SpeechChunk(spoken, pause))
-            continue
-        words = spoken.split()
-        current: list[str] = []
-        for word in words:
-            if current and len(" ".join((*current, word))) > limit:
-                result.append(SpeechChunk(" ".join(current), pause))
-                pause = 0.0
-                current = []
-            current.append(word)
-        if current:
-            result.append(SpeechChunk(" ".join(current), pause))
+        result.extend(SpeechChunk(part) for part in split_spoken(spoken))
     return result
 
 

@@ -37,6 +37,7 @@ STATE_DIR = Path.home() / ".cache" / "agyspeak"
 LAST_SESSION = STATE_DIR / "last_session.json"
 SESSIONS = STATE_DIR / "sessions.jsonl"
 HISTORY = STATE_DIR / "history"
+VOICE_MODE_SPEED = 1.08
 
 HELP = r"""
 [bold]Commands[/bold]
@@ -44,6 +45,7 @@ HELP = r"""
   /rec, /r \[note]   record, then ask for a note before sending
   Enter             start recording when the prompt is empty
   /last \[note]      re-send the most recent recording
+  /repeat           narrate the last model reply again
   /model \[name]     show or switch the model (see /models)
   /models           list models available through agy
   /new              start a fresh conversation
@@ -106,6 +108,7 @@ class VoiceMode:
             {
                 "text": chunk.text,
                 "voice": self.voice,
+                "speed": VOICE_MODE_SPEED,
                 "pause_before": chunk.pause_before,
             }
             for chunk in narration_chunks(markdown)
@@ -157,7 +160,11 @@ def _speech_command(arguments: str, voice: str) -> str:
     return "[yellow]usage:[/yellow] /speech status|stop|load [kokoro [voice]|qwen]|unload [kokoro|qwen|all]"
 
 
-def _save_session(client: AgyClient, voice_mode: VoiceMode | None = None) -> None:
+def _save_session(
+    client: AgyClient,
+    voice_mode: VoiceMode | None = None,
+    last_response: str | None = None,
+) -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     state = _load_session()
     state["model"] = client.model
@@ -166,6 +173,8 @@ def _save_session(client: AgyClient, voice_mode: VoiceMode | None = None) -> Non
     if voice_mode:
         state["voice"] = voice_mode.voice
         state["voice_mode"] = voice_mode.enabled
+    if last_response is not None:
+        state["last_response"] = last_response
     LAST_SESSION.write_text(json.dumps(state))
 
 
@@ -314,7 +323,7 @@ def _render_turn(turn: Turn, model: str) -> None:
     )
 
 
-def _send(client: AgyClient, text: str, clip: Path | None, voice_mode: VoiceMode) -> None:
+def _send(client: AgyClient, text: str, clip: Path | None, voice_mode: VoiceMode) -> str:
     label = "voice" if clip else "text"
     is_first = client.conversation_id is None
     with console.status(f"[bold blue]thinking[/bold blue] [dim]({label})[/dim]") as status:
@@ -332,9 +341,20 @@ def _send(client: AgyClient, text: str, clip: Path | None, voice_mode: VoiceMode
     _render_turn(turn, client.model)
     if speech_error := voice_mode.narrate(turn.response):
         console.print(speech_error)
-    _save_session(client, voice_mode)
+    _save_session(client, voice_mode, turn.response)
     if is_first:
         _log_session(client, text or "(voice message)")
+    return turn.response
+
+
+def _repeat_last(last_response: str, voice_mode: VoiceMode) -> str:
+    if not last_response.strip():
+        return "[yellow]no model reply yet[/yellow]"
+    if not voice_mode.enabled:
+        return "[yellow]voice mode is off[/yellow] (press Tab to enable it)"
+    if error := voice_mode.narrate(last_response):
+        return error
+    return "[dim]replaying last model reply[/dim]"
 
 
 def _run_agy(*args: str) -> None:
@@ -385,6 +405,7 @@ def main(
     atexit.register(speech_service.close)
 
     last = _load_session()
+    last_response = str(last.get("last_response") or "")
     model_given = "--model" in sys.argv or "-m" in sys.argv
     voice_given = any(arg == "--voice" or arg.startswith("--voice=") for arg in sys.argv[1:])
     if conversation:
@@ -468,7 +489,7 @@ def main(
                     except (EOFError, KeyboardInterrupt):
                         console.print("[dim]not sent[/dim]")
                         continue
-                _send(client, note, clip, voice_mode)
+                last_response = _send(client, note, clip, voice_mode)
             case "/last":
                 if last_clip is None:
                     latest = audio_mod.RECORDINGS_DIR / "latest.wav"
@@ -476,7 +497,9 @@ def main(
                 if last_clip is None:
                     console.print("[yellow]no recording yet[/yellow]")
                     continue
-                _send(client, rest, last_clip, voice_mode)
+                last_response = _send(client, rest, last_clip, voice_mode)
+            case "/repeat":
+                console.print(_repeat_last(last_response, voice_mode))
             case "/model":
                 if rest:
                     client.model = rest
@@ -485,6 +508,8 @@ def main(
                 _run_agy("models")
             case "/new":
                 client.reset()
+                last_response = ""
+                _save_session(client, voice_mode, last_response)
                 console.print("[dim]new conversation[/dim]")
             case "/id":
                 console.print(client.conversation_id or "[dim]none yet[/dim]")
@@ -507,7 +532,7 @@ def main(
             case _ if cmd.startswith("/"):
                 console.print(f"[yellow]unknown command {cmd}[/yellow] (try /help)")
             case _:
-                _send(client, line, None, voice_mode)
+                last_response = _send(client, line, None, voice_mode)
 
     speech_service.close()
     atexit.unregister(speech_service.close)

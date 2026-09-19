@@ -111,9 +111,18 @@ def parsed_text_blocks(markdown: str) -> list[TextBlock]:
     """Extract typed prose blocks from parsed Markdown, omitting source code."""
     blocks: list[TextBlock] = []
     kind = "paragraph"
+    table_row: list[str] | None = None
     for token in _parser().parse(markdown):
         if token.type == "heading_open":
             kind = "heading"
+            continue
+        if token.type == "tr_open":
+            table_row = []
+            continue
+        if token.type == "tr_close":
+            if table_row:
+                blocks.append(TextBlock("paragraph", "; ".join(table_row)))
+            table_row = None
             continue
         if token.type == "hr":
             blocks.append(TextBlock("break", ""))
@@ -123,6 +132,10 @@ def parsed_text_blocks(markdown: str) -> list[TextBlock]:
         elif token.type.startswith("math_block"):
             text = _plain_math(token.content)
         else:
+            continue
+        if table_row is not None:
+            if text:
+                table_row.append(text)
             continue
         if text:
             blocks.append(TextBlock(kind, text))

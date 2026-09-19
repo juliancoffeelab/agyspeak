@@ -1,5 +1,5 @@
 from agyspeak.speech_text import (
-    SECTION_PAUSE,
+    NARRATION_CHUNK_LIMIT,
     chunks,
     for_speech,
     narration_chunks,
@@ -36,7 +36,7 @@ def test_chunks_keep_sentences_in_one_markdown_block() -> None:
     ]
 
 
-def test_chunks_splits_markdown_blocks() -> None:
+def test_chunks_keep_markdown_blocks_as_render_boundaries() -> None:
     assert chunks("### Heading\n\nParagraph without punctuation") == [
         "Heading",
         "Paragraph without punctuation",
@@ -59,7 +59,7 @@ def test_chunks_split_only_unusually_long_blocks() -> None:
     assert chunks("one two three four", limit=10) == ["one two", "three four"]
 
 
-def test_narration_pauses_before_sections_but_not_paragraphs() -> None:
+def test_narration_has_no_artificial_pauses_between_blocks() -> None:
     script = narration_chunks(
         "Intro.\n\nAnother paragraph.\n\n---\n\n## Details\n\nFirst detail.\n\nSecond detail."
     )
@@ -71,12 +71,13 @@ def test_narration_pauses_before_sections_but_not_paragraphs() -> None:
         "First detail.",
         "Second detail.",
     ]
-    assert [chunk.pause_before for chunk in script] == [
-        0.0,
-        0.0,
-        SECTION_PAUSE,
-        0.0,
-        0.0,
+    assert [chunk.pause_before for chunk in script] == [0.0] * 5
+
+
+def test_long_blocks_split_at_logical_boundaries() -> None:
+    assert chunks("First sentence. Second sentence. Third sentence.", limit=34) == [
+        "First sentence. Second sentence.",
+        "Third sentence.",
     ]
 
 
@@ -84,3 +85,60 @@ def test_normalization_preserves_languages_and_ipa() -> None:
     source = "Дивно: /wɪərd/ [fiːəl] → clear"
 
     assert normalize_for_speech(source) == "Дивно: /wɪərd/ [fiːəl] to clear"
+
+
+def test_model_markdown_becomes_stable_playback_chunks() -> None:
+    markdown = '''## Transcription
+
+> "Hi, could you analyze my accent and tell me what you think?"
+
+---
+
+## Accent Assessment
+
+**Estimated Background:** Eastern Slavic, with strong indicators pointing toward Ukrainian.
+
+---
+
+## Why: Key Acoustic & Phonetic Markers
+
+1. **Vowel Realization:** The open front vowel is articulated slightly more centrally. The lax vowel tends toward a tenser position.
+2. **Prosody:** The sentence carries a more syllable-timed cadence than native English.
+
+## Overall Impression
+
+Your speech is fluent, clear, and very easy to understand.
+'''
+
+    script = narration_chunks(markdown)
+
+    assert [chunk.text for chunk in script] == [
+        "Transcription",
+        '"Hi, could you analyze my accent and tell me what you think?"',
+        "Accent Assessment",
+        "Estimated Background: Eastern Slavic, with strong indicators pointing toward Ukrainian.",
+        "Why: Key Acoustic and Phonetic Markers",
+        "Vowel Realization: The open front vowel is articulated slightly more centrally. The lax vowel tends toward a tenser position.",
+        "Prosody: The sentence carries a more syllable-timed cadence than native English.",
+        "Overall Impression",
+        "Your speech is fluent, clear, and very easy to understand.",
+    ]
+    assert all(chunk.pause_before == 0.0 for chunk in script)
+    assert all(len(chunk.text) <= NARRATION_CHUNK_LIMIT for chunk in script)
+
+
+def test_pronunciation_table_becomes_one_chunk_per_row() -> None:
+    markdown = '''| Word | Expected (from spelling) | Actual Pronunciation | Rhymes With |
+| --- | --- | --- | --- |
+| said | /seɪd/ or /sæd/ | /sɛd/ | bed, red, head |
+| says | /seɪz/ | /sɛz/ | fez, Pez |
+
+English spelling strikes again!
+'''
+
+    assert chunks(markdown) == [
+        "Word; Expected (from spelling); Actual Pronunciation; Rhymes With",
+        "said; /seɪd/ or /sæd/; /sɛd/; bed, red, head",
+        "says; /seɪz/; /sɛz/; fez, Pez",
+        "English spelling strikes again!",
+    ]

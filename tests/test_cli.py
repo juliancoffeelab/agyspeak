@@ -93,6 +93,7 @@ def test_voice_mode_warms_narrates_and_unloads(monkeypatch) -> None:
     assert calls[0] == ("warm", "bm_fable")
     assert calls[1][0] == "start"
     assert [line["text"] for line in calls[1][1]] == ["Hello. How are you?"]
+    assert calls[1][1][0]["speed"] == cli.VOICE_MODE_SPEED
     assert calls[1][1][0]["pause_before"] == 0.0
     assert calls[1][2] == 0.0
     assert calls[2] == ("unload",)
@@ -115,6 +116,37 @@ def test_voice_mode_notifies_persistence_after_state_changes(monkeypatch) -> Non
         ("am_echo", True),
         ("am_echo", False),
     ]
+
+
+def test_repeat_narrates_the_last_model_reply(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(cli.player, "start", lambda lines, pause: calls.append((lines, pause)))
+    mode = cli.VoiceMode(voice="af_heart", enabled=True)
+
+    result = cli._repeat_last("**Hello.** Still here.", mode)
+
+    assert result == "[dim]replaying last model reply[/dim]"
+    assert [line["text"] for line in calls[0][0]] == ["Hello. Still here."]
+    assert calls[0][1] == 0.0
+
+
+def test_repeat_requires_a_reply_and_voice_mode() -> None:
+    assert "no model reply" in cli._repeat_last("", cli.VoiceMode(enabled=True))
+    assert "voice mode is off" in cli._repeat_last("Hello", cli.VoiceMode())
+
+
+def test_last_model_reply_survives_session_updates(monkeypatch, tmp_path) -> None:
+    state_file = tmp_path / "last_session.json"
+    monkeypatch.setattr(cli, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(cli, "LAST_SESSION", state_file)
+    client = SimpleNamespace(model="gemini-test", conversation_id="conversation-1")
+
+    cli._save_session(client, cli.VoiceMode(enabled=True), "Last model reply")
+    cli._save_session(client, cli.VoiceMode(voice="am_echo", enabled=False))
+
+    state = cli._load_session()
+    assert state["last_response"] == "Last model reply"
+    assert state["voice"] == "am_echo"
 
 
 def test_speech_commands_control_harness_models(monkeypatch) -> None:
