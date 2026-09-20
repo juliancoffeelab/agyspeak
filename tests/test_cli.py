@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -36,6 +37,13 @@ def test_enter_with_text_submits_text_unchanged() -> None:
 
     assert buffer.text == "hello"
     assert buffer.submitted
+
+
+def test_display_path_shortens_home_directory() -> None:
+    assert cli._display_path(Path.home() / ".cache" / "agyspeak" / "clip.wav") == (
+        "~/.cache/agyspeak/clip.wav"
+    )
+    assert cli._display_path(Path("/tmp/clip.wav")) == "/tmp/clip.wav"
 
 
 def test_cancelling_recording_leaves_no_background_stdin_reader(monkeypatch) -> None:

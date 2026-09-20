@@ -244,6 +244,14 @@ def _load_session() -> dict:
         return {}
 
 
+def _display_path(path: Path) -> str:
+    """Shorten paths under the user's home directory for terminal output."""
+    try:
+        return str(Path("~") / path.relative_to(Path.home()))
+    except ValueError:
+        return str(path)
+
+
 def _recording_input(fd: int, timeout: float = 0.05) -> str | None:
     """Return stop/cancel for terminal input without assuming cooked line mode."""
     ready, _, _ = select.select([fd], [], [], timeout)
@@ -297,7 +305,7 @@ def _record(device: int | None) -> Path | None:
         return None
     path = rec.save(samples)
     secs = len(samples) / rec.sample_rate
-    console.print(f"[dim]saved {secs:.1f}s → {path}[/dim]")
+    console.print(f"[dim]saved {secs:.1f}s → {_display_path(path)}[/dim]")
     return path
 
 
