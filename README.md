@@ -114,6 +114,12 @@ Kokoro/Qwen playback and replay use the running `agyspeak` process. macOS `say`
 can run directly. `agy mcp add` is global and makes the tools visible to every
 `agy` session.
 
+# More screenshots
+<img width="721" height="578" alt="зображення" src="https://github.com/user-attachments/assets/39727adc-fd08-4ce5-886c-12235d701c45" />
+<img width="720" height="749" alt="зображення" src="https://github.com/user-attachments/assets/b3135dc7-b33d-4b77-984d-05a763394536" />
+
+
+
 # Notes
 It's a funny experiment made with Fable and Sol. If something isn't right, tell
 your chatbot to figure it out.
