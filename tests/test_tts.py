@@ -7,6 +7,33 @@ from agyspeak import tts
 from agyspeak.speech_text import narration_chunks
 
 
+def test_kokoro_inlines_pronunciations_without_splitting_the_sentence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    class FakePipeline:
+        def __call__(self, text: str, voice: str, speed: float):
+            calls.append(text)
+            yield text, "", np.array([1.0], dtype=np.float32)
+
+    monkeypatch.setattr(tts, "_pipeline", lambda lang: FakePipeline())
+    monkeypatch.setattr(tts, "_voice", lambda voice: "voice.pt")
+
+    tts.kokoro_render(
+        "It is /ðɪs/, not [d̪ɪs]. Say /t/, [ɪ], and [fiːəl]. "
+        "Stress /'ʤʌmpɪŋz/ and [ˌkwɪk]. "
+        "Keep [optional], this/that, and don't change prose."
+    )
+
+    assert calls == [
+        "It is [ðɪs](/ðɪs/), not [d̪ɪs](/d̪ɪs/). "
+        "Say tuh, ih, and [fiːəl](/fiːəl/). "
+        "Stress [ʤʌmpɪŋz](/ʤʌmpɪŋz/) and [kwɪk](/kwɪk/). "
+        "Keep [optional], this/that, and don't change prose."
+    ]
+
+
 def test_qwen_speaker_selects_qwen(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
     rendered = np.array([0.25, -0.25], dtype=np.float32)

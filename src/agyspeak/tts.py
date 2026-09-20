@@ -6,6 +6,7 @@ import gc
 import logging
 import os
 import queue
+import re
 import subprocess
 import threading
 from datetime import datetime
@@ -22,6 +23,51 @@ EDGE_SILENCE_KEEP_SECONDS = 0.04
 STREAM_START_BUFFER_SECONDS = 5.0
 DEFAULT_KOKORO_VOICE = "af_heart"
 DEFAULT_SAY_VOICE = "Samantha"
+_PRONUNCIATION = re.compile(
+    r"(?<![\w/])/(?P<slash>[^/\n]+)/(?![\w/])"
+    r"|(?<!\w)\[(?P<bracket>[^\[\]\n]+)\](?!\()"
+)
+_SINGLE_PHONEME_SPELLINGS = {
+    "p": "puh",
+    "b": "buh",
+    "t": "tuh",
+    "d": "duh",
+    "k": "kuh",
+    "g": "guh",
+    "f": "fuh",
+    "v": "vuh",
+    "θ": "thuh",
+    "ð": "thuh",
+    "s": "suh",
+    "z": "zuh",
+    "ʃ": "shuh",
+    "ʒ": "zhuh",
+    "h": "huh",
+    "m": "muh",
+    "n": "nuh",
+    "ŋ": "nguh",
+    "l": "luh",
+    "r": "ruh",
+    "ɹ": "ruh",
+    "j": "yuh",
+    "w": "wuh",
+    "i": "ee",
+    "ɪ": "ih",
+    "e": "ay",
+    "ɛ": "eh",
+    "æ": "ah",
+    "ə": "uh",
+    "ʌ": "uh",
+    "ɑ": "ah",
+    "ɒ": "aw",
+    "ɔ": "aw",
+    "ʊ": "ooh",
+    "u": "oo",
+    "ɜ": "ur",
+    "ɚ": "er",
+    "a": "ah",
+    "o": "oh",
+}
 
 # Qwen3-TTS via mlx-audio (Apple Silicon). 0.6B 8-bit fits alongside Kokoro in 8 GB RAM.
 QWEN_REPO = "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit"
@@ -97,10 +143,34 @@ def _voice(voice: str) -> str:
     return ",".join(paths)
 
 
+def _kokoro_pronunciations(text: str) -> str:
+    """Turn phonetic notation into Kokoro's inline pronunciation syntax."""
+    def replace(match: re.Match) -> str:
+        bracketed = match.group("bracket")
+        phonemes = (match.group("slash") or bracketed).strip()
+        phonemes = phonemes.translate(str.maketrans("", "", "'’ˈˌ"))
+        has_ipa_symbol = any(
+            "\u0250" <= char <= "\u02ff"
+            or "\u0300" <= char <= "\u036f"
+            or char in "æçðøħŋœβθχ"
+            for char in phonemes
+        )
+        if bracketed is not None and not (
+            phonemes in _SINGLE_PHONEME_SPELLINGS or has_ipa_symbol
+        ):
+            return match.group(0)
+        if phonemes in _SINGLE_PHONEME_SPELLINGS:
+            return _SINGLE_PHONEME_SPELLINGS[phonemes]
+        return f"[{phonemes}](/{phonemes}/)"
+
+    return _PRONUNCIATION.sub(replace, text)
+
+
 def kokoro_render(text: str, voice: str = DEFAULT_KOKORO_VOICE, speed: float = 1.0) -> np.ndarray:
     """Synthesize text and return float32 samples at KOKORO_RATE."""
     lang_code = voice[0] if voice[:1] in KOKORO_LANGS else "a"
     pipe = _pipeline(lang_code)
+    text = _kokoro_pronunciations(text)
     chunks = [np.asarray(audio) for _, _, audio in pipe(text, voice=_voice(voice), speed=speed)]
     if not chunks:
         raise NoAudioError("kokoro produced no audio")
