@@ -70,75 +70,47 @@ Things learned the hard way:
 - The model knows your macOS username regardless of where recordings live: agy's
   own system prompt includes its home, scratch, and MCP directories. Hiding it
   would mean faking `$HOME`, which would break agy's auth and config.
-- Only the `gemini-3.7-flash-*` models actually receive the audio through `agy`.
-  The `gemini-3.8-flash-*` models ignore the attachment and fall back to tools.
 - The `google-antigravity` Python SDK talks to the Gemini API directly and needs
   `GEMINI_API_KEY`, so it does not use the subscription. That is why this shells
   out to `agy` instead.
 
 ## Letting Gemini talk back (optional)
 
-`agyspeak-mcp` is a small MCP server that exposes a
-`speak(text, voice="af_heart", speed=1.0, engine="auto", instruct=None,
-language="auto")` tool. It synthesizes
-with [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M), an 82M-parameter local
-TTS model that runs on CPU/MPS, and plays the result with `afplay`. Pass
-`engine="say"` for the instant macOS voice instead. Once registered, Gemini calls
-it when you ask to hear something ("say that", "read it back"), and stays quiet
-otherwise. Kokoro has no emotion control; intonation comes from punctuation,
-voice choice (a/b = American/British, f/m = female/male) and `speed`. Two voices
-can be blended with `+`, e.g. `af_heart+bf_emma`.
+`agyspeak-mcp` adds local speech tools to `agy`. It can speak with Kokoro, Qwen3-TTS,
+or macOS `say`, narrate scripts, stop playback, and replay saved audio. The speech
+models run locally and download their weights on first use. `espeak-ng` is needed
+by Kokoro for words outside its dictionary:
 
-A second tool, `narrate(lines=[{text, voice, speed}, ...], pause=0.4)`, plays a
-whole multi-speaker script. Kokoro-only scripts start playing after the first
-line renders, then render the rest during playback. A script containing Qwen
-renders completely before playback so it has no pauses between lines. The MCP
-tool still returns immediately. Gemini uses it for stories and dialogues; it
-also costs one tool round-trip instead of one per line, which matters because
-every round-trip resends the full conversation. `stop_speaking()` cuts off
-whatever is playing while keeping loaded models warm. An in-flight render
-finishes its current line silently before the worker starts another request.
-
-A second engine, [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) 0.6B via
-mlx-audio, is selected by using one of its speaker names as the voice (Ryan,
-Vivian, Serena, Dylan, Eric, Aiden, Uncle_Fu, Ono_Anna, Sohee). It renders at
-several times slower than playback on this machine, but takes a free-text
-`instruct` ("whispering, conspiratorial", "barely holding back laughter") and
-speaks ten languages. The 8-bit weights (~1 GB) download from `mlx-community`
-on first use. Lines from both engines can be mixed in one `narrate` script. Use
-Qwen for a few expressive lines and Kokoro for narration or long passages.
-
-Speech requests go over a private Unix socket to the running agyspeak harness.
-The harness itself owns the queue and loaded Kokoro or Qwen models, so MCP calls
-return immediately and models stay warm between calls. Only one speech request
-runs at a time; a new request cancels the old one. `/speech load`, `/speech
-unload`, `/speech stop`, and `/speech status` expose that lifecycle directly in
-the REPL. Exiting agyspeak stops playback, unloads the models, and removes the
-socket—there is no independent speech daemon left behind.
-
-Kokoro needs `espeak-ng` for words outside its dictionary (`brew install
-espeak-ng`). The model (~330 MB) downloads from Hugging Face on first use into
-`~/.cache/huggingface/`. Generated speech is kept under
-`~/.cache/agyspeak/speech/` as matching `speech_<id>.json` and `.wav` files.
-The JSON records the text, voices, settings, status, and audio duration, so the
-archive can be searched with tools such as `rg` or `jq`.
-
-The MCP also exposes `list_audio(kind="all", limit=10)` and
-`replay_audio(kind, audio_id="latest")`. They let the assistant discover and
-replay microphone recordings or generated speech without receiving arbitrary
-filesystem access. Speech and replay tools only work for an `agy` process
-launched by agyspeak, which inherits the harness socket; standalone `agy` never
-starts a background service on its own.
+```sh
+brew install espeak-ng
+```
 
 ```sh
 agy mcp add agyspeak "$PWD/.venv/bin/agyspeak-mcp"
 ```
 
-Headless `agy` cannot prompt for permission, so allow that one tool in
+For headless `agy`, allow the tools in
 `~/.gemini/antigravity-cli/settings.json`:
 
 ```json
-{ "permissions": { "allow": ["mcp(agyspeak/speak)", "mcp(agyspeak/narrate)", "mcp(agyspeak/stop_speaking)", "mcp(agyspeak/list_audio)", "mcp(agyspeak/replay_audio)", "mcp(agyspeak/unload_speech)"] } }
+{
+  "permissions": {
+    "allow": [
+      "mcp(agyspeak/speak)",
+      "mcp(agyspeak/narrate)",
+      "mcp(agyspeak/stop_speaking)",
+      "mcp(agyspeak/list_audio)",
+      "mcp(agyspeak/replay_audio)",
+      "mcp(agyspeak/unload_speech)"
+    ]
+  }
+}
 ```
 
-Note that `agy mcp add` is global, so the tool is visible to every agy session.
+Kokoro/Qwen playback and replay use the running `agyspeak` process. macOS `say`
+can run directly. `agy mcp add` is global and makes the tools visible to every
+`agy` session.
+
+# Notes
+It's a funny experiment made with Fable and Sol. If something isn't right, tell
+your chatbot to figure it out.
