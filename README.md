@@ -4,6 +4,9 @@ Terminal chat with Gemini that lets you talk instead of type. It records your
 microphone to a WAV file and hands it to the Antigravity CLI (`agy`), so it runs
 on your Antigravity subscription with no API key.
 
+<img width="722" height="616" alt="зображення" src="https://github.com/user-attachments/assets/03ea03fa-f18f-4f6b-95cc-d0f2f2b37265" />
+
+
 ## Requirements
 
 - macOS with the `agy` CLI installed and logged in
