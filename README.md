@@ -114,6 +114,16 @@ Kokoro/Qwen playback and replay use the running `agyspeak` process. macOS `say`
 can run directly. `agy mcp add` is global and makes the tools visible to every
 `agy` session.
 
+## Vendored Swedish Kokoro
+
+The Swedish Kokoro runtime is in [`vendor/kokoro-sv`](vendor/kokoro-sv).
+uv installs it as an editable workspace dependency, so Python edits there take
+effect directly. The copy includes our pronunciation phrasing patch; model
+weights and lexicons stay in Hugging Face's download cache.
+
+See [`VENDORED.md`](vendor/kokoro-sv/VENDORED.md) for the upstream revision,
+license, local changes, and focused checks.
+
 # More screenshots
 <img width="721" height="578" alt="зображення" src="https://github.com/user-attachments/assets/39727adc-fd08-4ce5-886c-12235d701c45" />
 <img width="720" height="749" alt="зображення" src="https://github.com/user-attachments/assets/b3135dc7-b33d-4b77-984d-05a763394536" />

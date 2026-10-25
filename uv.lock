@@ -3,6 +3,10 @@ revision = 3
 requires-python = "==3.13.*"
 
 [manifest]
+members = [
+    "agyspeak",
+    "kokoro-sv",
+]
 excludes = ["spacy-curated-transformers"]
 
 [[package]]
@@ -21,6 +25,7 @@ source = { editable = "." }
 dependencies = [
     { name = "en-core-web-sm" },
     { name = "kokoro" },
+    { name = "kokoro-sv" },
     { name = "markdown-it-py" },
     { name = "mcp" },
     { name = "mdit-py-plugins" },
@@ -43,6 +48,7 @@ dev = [
 requires-dist = [
     { name = "en-core-web-sm", url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" },
     { name = "kokoro", git = "https://github.com/hexgrad/kokoro?rev=4b647d371e837e1f6e356bbbabc99b0c436f27bd" },
+    { name = "kokoro-sv", editable = "vendor/kokoro-sv" },
     { name = "markdown-it-py", specifier = ">=4.0.0" },
     { name = "mcp", specifier = ">=2.2.0" },
     { name = "mdit-py-plugins", specifier = ">=0.5.0" },
@@ -664,6 +670,31 @@ dependencies = [
     { name = "numpy" },
     { name = "torch" },
     { name = "transformers" },
+]
+
+[[package]]
+name = "kokoro-sv"
+version = "0.1.3"
+source = { editable = "vendor/kokoro-sv" }
+dependencies = [
+    { name = "huggingface-hub" },
+    { name = "kokoro" },
+    { name = "num2words" },
+    { name = "numpy" },
+    { name = "scipy" },
+    { name = "soundfile" },
+    { name = "torch" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "huggingface-hub" },
+    { name = "kokoro", specifier = ">=0.9" },
+    { name = "num2words" },
+    { name = "numpy" },
+    { name = "scipy" },
+    { name = "soundfile" },
+    { name = "torch" },
 ]
 
 [[package]]

@@ -7,6 +7,7 @@ requires-python = ">=3.13,<3.14"
 dependencies = [
     "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
     "kokoro @ git+https://github.com/hexgrad/kokoro@4b647d371e837e1f6e356bbbabc99b0c436f27bd",
+    "kokoro-sv",
     "markdown-it-py>=4.0.0",
     "mcp>=2.2.0",
     "mdit-py-plugins>=0.5.0",
@@ -39,6 +40,14 @@ allow-direct-references = true
 # uses en_core_web_sm with trf=False. Loading the unused plugin invokes the
 # deprecated TorchScript path on every Kokoro startup.
 exclude-dependencies = ["spacy-curated-transformers"]
+
+[tool.uv.workspace]
+members = [
+    "vendor/kokoro-sv",
+]
+
+[tool.uv.sources]
+kokoro-sv = { workspace = true, editable = true }
 
 [dependency-groups]
 dev = [
