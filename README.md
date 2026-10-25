@@ -30,6 +30,15 @@ switch voices or `/voices` to list them. `--voice bm_fable` selects the startup
 voice without enabling speech. The selected voice and on/off state are restored
 after restarting agyspeak, including when resuming with `-c`.
 
+For bilingual English/Swedish replies, Gemini wraps Swedish passages in
+`<speak language="sv">...</speak>`. Voice mode uses the vendored Swedish Kokoro
+voice **Klara**, then returns to your selected English voice. Swedish model
+weights download on first use. Swedish text keeps its native letter names;
+for example, `<speak language="sv">bokstaven S</speak>`. Use ordinary Swedish
+spelling inside the tags, and IPA in English explanations for individual sounds.
+The updated preamble applies to new conversations (`/new`); resumed chats keep
+their existing instructions.
+
 Inside the chat:
 
 | input              | effect                                                   |
@@ -122,7 +131,8 @@ effect directly. The copy includes our pronunciation phrasing patch; model
 weights and lexicons stay in Hugging Face's download cache.
 
 See [`VENDORED.md`](vendor/kokoro-sv/VENDORED.md) for the upstream revision,
-license, local changes, and focused checks.
+license, local changes, and focused checks. The harness routes Swedish speech
+to this vendored engine.
 
 # More screenshots
 <img width="721" height="578" alt="зображення" src="https://github.com/user-attachments/assets/39727adc-fd08-4ce5-886c-12235d701c45" />
@@ -133,3 +143,29 @@ license, local changes, and focused checks.
 # Notes
 It's a funny experiment made with Fable and Sol. If something isn't right, tell
 your chatbot to figure it out.
+
+### Scoped speech in replies
+
+Use the same options as the `speak` tool inside a scoped block:
+
+```xml
+English explanation. <speak language="sv" voice="Lars" speed="0.9">
+Ringarnas härskare
+
+Text to read in Swedish.
+</speak> Back to English.
+```
+
+The terminal hides the tags and renders their contents as normal Markdown;
+code examples remain literal. Attributes are `voice`, `language`, `speed`
+(0.5–1.5), `engine`, and `instruct` (Qwen only). Nested scopes inherit options
+and restore the enclosing options when closed. Swedish voice names select
+`kokoro-sv` automatically; Swedish without a named voice uses Klara.
+`<swedish>…</swedish>` remains supported. Use `engine="say" voice="Alva"`
+for macOS speech.
+
+Explicit `<speak>` blocks preserve line breaks for the vendored Swedish phrasing
+patch. They stay together until the model context requires splitting, without
+inserting extra silence. Swedish synthesis uses MPS on Apple Silicon, CUDA when
+available elsewhere, and CPU otherwise. Restart the harness and use `/new` to
+load the updated Gemini prompt.

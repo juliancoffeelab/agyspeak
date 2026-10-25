@@ -12,6 +12,7 @@ from mdit_py_plugins.dollarmath import dollarmath_plugin
 from mdit_py_plugins.texmath import texmath_plugin
 from pylatexenc.latex2text import LatexNodes2Text
 from rich.markdown import Markdown
+from agyspeak.speech_markup import protect_tags, visible_text
 
 _CONVERTER = LatexNodes2Text()
 _OPERATORS = "→←↔⇒⇐⇔⟶⟵≈≠≤≥×·±="
@@ -56,8 +57,15 @@ def _convert_inline_math(token: Token) -> None:
 
 def terminal_tokens(markdown: str) -> list[Token]:
     """Parse Markdown and replace math nodes with terminal-safe text nodes."""
+    marked, tags = protect_tags(markdown)
+    def reveal(token):
+        if token.type in {'text', 'code_inline', 'fence', 'code_block'}:
+            token.content = visible_text(token.content, tags, literal=token.type != 'text')
+        for child in token.children or []:
+            reveal(child)
     result: list[Token] = []
-    for token in _parser().parse(markdown):
+    for token in _parser().parse(marked):
+        reveal(token)
         if token.type.startswith("math_block"):
             result.extend(
                 [
@@ -85,19 +93,21 @@ class TerminalMarkdown(Markdown):
         self.parsed = terminal_tokens(markup)
 
 
-def _inline_text(tokens: list[Token]) -> str:
+def _inline_text(tokens: list[Token], tags=None, line_breaks=False) -> str:
     parts: list[str] = []
     for token in tokens:
         if token.type == "math_inline":
             parts.append(_plain_math(token.content))
-        elif token.type in {"text", "code_inline"}:
+        elif token.type == 'code_inline':
+            parts.append(visible_text(token.content, tags or {}, literal=True))
+        elif token.type == 'text':
             parts.append(token.content)
         elif token.type in {"softbreak", "hardbreak"}:
-            parts.append(" ")
+            parts.append("\n" if line_breaks else " ")
         elif token.type == "image":
-            parts.append(_inline_text(token.children or []) or token.content)
+            parts.append(_inline_text(token.children or [], tags, line_breaks) or token.content)
         elif token.children:
-            parts.append(_inline_text(token.children))
+            parts.append(_inline_text(token.children, tags, line_breaks))
     return "".join(parts)
 
 
@@ -107,8 +117,11 @@ class TextBlock:
     text: str
 
 
-def parsed_text_blocks(markdown: str) -> list[TextBlock]:
+def parsed_text_blocks(markdown: str, *, speech_tags=None, line_breaks=False) -> list[TextBlock]:
     """Extract typed prose blocks from parsed Markdown, omitting source code."""
+    keep_controls = speech_tags is not None
+    if speech_tags is None:
+        markdown, speech_tags = protect_tags(markdown)
     blocks: list[TextBlock] = []
     kind = "paragraph"
     table_row: list[str] | None = None
@@ -128,7 +141,9 @@ def parsed_text_blocks(markdown: str) -> list[TextBlock]:
             blocks.append(TextBlock("break", ""))
             continue
         if token.type == "inline":
-            text = _inline_text(token.children or []).strip()
+            text = _inline_text(token.children or [], speech_tags, line_breaks).strip()
+            if not keep_controls:
+                text = visible_text(text, speech_tags)
         elif token.type.startswith("math_block"):
             text = _plain_math(token.content)
         else:

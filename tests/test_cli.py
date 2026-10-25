@@ -191,3 +191,16 @@ def test_speech_status_shows_loaded_models_and_error(monkeypatch) -> None:
     assert "idle" in result
     assert "kokoro a" in result
     assert "last error" in result
+
+
+def test_voice_mode_routes_swedish_and_returns_to_selected_voice(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(cli.player, 'start', lambda lines, pause: calls.append(lines))
+    mode = cli.VoiceMode(voice='bm_fable', enabled=True)
+    assert mode.narrate('In Swedish: <swedish>bokstaven S</swedish>. Now English.') is None
+    assert [(line['text'], line['voice']) for line in calls[0]] == [
+        ('In Swedish:', 'bm_fable'), ('bokstaven S', 'Klara'),
+        ('. Now English.', 'bm_fable'),
+    ]
+    assert calls[0][1]['engine'] == 'auto'
+    assert calls[0][1]['language'] == 'sv'

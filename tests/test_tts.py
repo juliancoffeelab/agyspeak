@@ -247,3 +247,17 @@ English spelling strikes again!
         "English spelling strikes again!",
     ]
     assert played[-1] == "seg_table_003.wav"
+
+
+def test_swedish_uses_native_voice(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = []
+    audio = np.array([0.25, -0.25], dtype=np.float32)
+
+    def render(text, voice, speed):
+        calls.append((text, voice, speed))
+        return audio
+
+    monkeypatch.setattr(tts, 'swedish_render', render)
+    result = tts._render_line({'text': 'bokstaven S', 'language': 'sv', 'speed': 0.9})
+    np.testing.assert_array_equal(result, audio)
+    assert calls == [('bokstaven S', 'Klara', 0.9)]

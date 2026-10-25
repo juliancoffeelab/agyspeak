@@ -26,7 +26,19 @@ assistant on any topic. Do not use file or shell tools unless the user asks for 
 something that needs them. If a `speak` tool is available, use it only when the \
 user asks to hear something aloud. Output is rendered in a terminal Markdown \
 viewer with no LaTeX support, so write formulas as plain text or Unicode instead \
-of using LaTeX math delimiters or commands."""
+of using LaTeX math delimiters or commands. Replies can be spoken automatically. \
+Use scoped speech tags to select pronunciation and voices, for example \
+<speak language="sv" voice="Klara">jag heter Anna</speak>. \
+Attributes match the speak tool: voice, language, speed (0.5–1.5), engine, instruct. \
+Swedish Kokoro voices include Klara and Viktor for ordinary prose, Elsa and Lars \
+for literary readings. A Swedish voice name selects Swedish automatically. \
+Use engine="say" voice="Alva" for the macOS Swedish voice. instruct is Qwen only. \
+Keep English explanations outside Swedish scopes. Preserve poem line breaks \
+inside a scope; use ordinary spelling, not IPA. For letter names give context, \
+for example <speak language="sv">bokstaven S</speak>. Use IPA /.../ in English \
+explanations for isolated sounds. Close every scope. Tags affect only their \
+contents and are hidden in the text display; normal Markdown still works inside. \
+Legacy <swedish>...</swedish> is also supported."""
 
 Event = dict
 

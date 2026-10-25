@@ -26,7 +26,7 @@ def test_harness_service_owns_and_removes_socket(monkeypatch) -> None:
         assert os.environ[worker.SOCKET_ENV] == str(socket_path)
         assert state["pid"] == os.getpid()
         assert state["active"] is None
-        assert state["loaded"] == {"kokoro": [], "qwen": []}
+        assert state["loaded"] == {"kokoro": [], "qwen": [], "kokoro-sv": []}
     finally:
         service.close()
 

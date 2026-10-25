@@ -42,7 +42,9 @@ def speak(
     (for example "say that", "read it back", "pronounce this"). Never call it
     on your own initiative, and do not read out your whole reply unless asked.
 
-    Two engines. Kokoro (voices like af_heart) is fast and clear; intonation
+    Swedish voice names (Klara, Viktor, Elsa, Lars, Alice, Ebba, Stina, Greta,
+    Björn, Nils, Anton, Oskar) select local Swedish Kokoro with line-break phrasing.
+    Kokoro (voices like af_heart) is fast and clear; intonation
     comes only from punctuation. Qwen (speakers Ryan, Vivian, Serena, Dylan,
     Eric, Aiden, Uncle_Fu, Ono_Anna, Sohee) renders several times slower than
     playback, but follows a free-text `instruct` such as "whispering,
@@ -58,10 +60,10 @@ def speak(
         voice: Kokoro voice id (see narrate) or a Qwen speaker name. For engine
             "say" a macOS voice name.
         speed: Playback speed multiplier, 0.5 (slow, for learners) to 1.5.
-        engine: "auto" (from the voice name), "kokoro", "qwen", or "say"
+        engine: "auto" (from the voice name), "kokoro", "kokoro-sv", "qwen", or "say"
             (macOS built-in, instant, robotic).
         instruct: Qwen only. Free-text emotion or style direction.
-        language: Qwen only. Language name such as "Japanese", or "auto".
+        language: Swedish selects kokoro-sv; otherwise Qwen only. Language name such as "Japanese", or "auto".
     """
     try:
         if engine == "say":
@@ -73,7 +75,7 @@ def speak(
         if engine != "auto":
             line["engine"] = engine
         _, seconds = player.start([line])
-        used = engine if engine != "auto" else ("qwen" if voice in tts.QWEN_SPEAKERS else "kokoro")
+        used = tts.line_engine(line)
         return f"speaking {len(text.split())} words with {used}/{voice}, about {seconds:.0f}s"
     except Exception as exc:  # report to the model instead of crashing the server
         return f"speak failed ({engine}/{voice}): {_reason(exc)}"

@@ -55,8 +55,8 @@ HELP = r"""
   /voice [name]     show or select the Kokoro voice
   /voices           list available Kokoro voices
   /speech status    show loaded models and queued work
-  /speech load [kokoro [voice]|qwen]
-  /speech unload [kokoro|qwen|all]
+  /speech load [kokoro [voice]|kokoro-sv|qwen]
+  /speech unload [kokoro|kokoro-sv|qwen|all]
   /speech stop      stop current and queued speech
   Tab               toggle automatic voice replies
   /help             this text
@@ -104,18 +104,21 @@ class VoiceMode:
     def narrate(self, markdown: str) -> str | None:
         if not self.enabled:
             return None
-        lines = [
-            {
-                "text": chunk.text,
-                "voice": self.voice,
-                "speed": VOICE_MODE_SPEED,
-                "pause_before": chunk.pause_before,
-            }
-            for chunk in narration_chunks(markdown)
-        ]
-        if not lines:
-            return None
         try:
+            lines = [
+                {
+                    "text": chunk.text,
+                    "voice": chunk.voice or (tts.DEFAULT_SWEDISH_VOICE if chunk.language == "sv" else self.voice),
+                    "language": chunk.language,
+                    "engine": chunk.engine or "auto",
+                    "speed": chunk.speed if chunk.speed is not None else VOICE_MODE_SPEED,
+                    "instruct": chunk.instruct,
+                    "pause_before": chunk.pause_before,
+                }
+                for chunk in narration_chunks(markdown)
+            ]
+            if not lines:
+                return None
             player.start(lines, pause=0.0)
         except Exception as exc:
             return f"[yellow]could not narrate reply:[/yellow] {exc}"
@@ -135,7 +138,7 @@ def _speech_command(arguments: str, voice: str) -> str:
             activity = state["active"] or "idle"
             result = (
                 f"speech: [bold]{activity}[/bold] · queued {state['queued']} · "
-                f"kokoro {kokoro} · qwen {qwen}"
+                f"kokoro {kokoro} · qwen {qwen} · kokoro-sv {', '.join(loaded.get('kokoro-sv', [])) or 'none'}"
             )
             if state.get("last_error"):
                 result += f"\n[red]last error:[/red] {state['last_error']}"
@@ -144,20 +147,20 @@ def _speech_command(arguments: str, voice: str) -> str:
             return "[dim]speech stopped[/dim]" if player.stop() else "[dim]nothing was playing[/dim]"
         if action == "load" and len(parts) <= 3:
             engine = parts[1] if len(parts) >= 2 else "kokoro"
-            if engine not in {"kokoro", "qwen"}:
+            if engine not in {"kokoro", "kokoro-sv", "qwen"}:
                 raise ValueError(f"unknown speech engine {engine!r}")
             selected_voice = parts[2] if len(parts) == 3 else voice
             worker.load(engine, selected_voice)
             return f"[dim]loading {engine} in the background[/dim]"
         if action == "unload" and len(parts) <= 2:
             engine = parts[1] if len(parts) == 2 else "all"
-            if engine not in {"kokoro", "qwen", "all"}:
+            if engine not in {"kokoro", "kokoro-sv", "qwen", "all"}:
                 raise ValueError(f"unknown speech engine {engine!r}")
             player.unload(engine)
             return f"[dim]unloading {engine} in the background[/dim]"
     except Exception as exc:
         return f"[red]speech command failed:[/red] {exc}"
-    return "[yellow]usage:[/yellow] /speech status|stop|load [kokoro [voice]|qwen]|unload [kokoro|qwen|all]"
+    return "[yellow]usage:[/yellow] /speech status|stop|load [kokoro [voice]|kokoro-sv|qwen]|unload [kokoro|kokoro-sv|qwen|all]"
 
 
 def _save_session(

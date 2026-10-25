@@ -142,3 +142,24 @@ English spelling strikes again!
         "says; /seɪz/; /sɛz/; fez, Pez",
         "English spelling strikes again!",
     ]
+
+
+def test_swedish_spans_switch_language_without_english_letter_names() -> None:
+    result = narration_chunks('Say **<swedish>jag</swedish>**, then <swedish>bokstaven S</swedish>.')
+    assert [(part.text, part.language) for part in result] == [
+        ('Say', 'en'), ('jag', 'sv'), (', then', 'en'),
+        ('bokstaven S.', 'sv'),
+    ]
+
+
+def test_swedish_tags_span_paragraphs_and_preserve_markdown_cleanup() -> None:
+    result = narration_chunks('<swedish>\n\n**Hej!**\n\nJag heter Anna.\n\n</swedish>\n\nBack to English.')
+    assert [(part.text, part.language) for part in result] == [
+        ('Hej!', 'sv'), ('Jag heter Anna.', 'sv'), ('Back to English.', 'en'),
+    ]
+
+
+def test_swedish_tags_in_fenced_code_do_not_change_language() -> None:
+    assert [(part.text, part.language) for part in narration_chunks(
+        '```xml\n<swedish>hej</swedish>\n```\n\nHello.'
+    )] == [('Hello.', 'en')]

@@ -9,11 +9,13 @@ import queue
 import re
 import subprocess
 import threading
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
 import numpy as np
 import soundfile as sf
+from agyspeak.speech_markup import SWEDISH_VOICES
 
 SPEECH_DIR = Path.home() / ".cache" / "agyspeak" / "speech"
 KOKORO_REPO = "hexgrad/Kokoro-82M"
@@ -23,6 +25,8 @@ EDGE_SILENCE_KEEP_SECONDS = 0.04
 STREAM_START_BUFFER_SECONDS = 5.0
 DEFAULT_KOKORO_VOICE = "af_heart"
 DEFAULT_SAY_VOICE = "Samantha"
+DEFAULT_SWEDISH_VOICE = "Klara"
+_swedish_models: dict[str, object] = {}
 _PRONUNCIATION = re.compile(
     r"(?<![\w/])/(?P<slash>[^/\n]+)/(?![\w/])"
     r"|(?<!\w)\[(?P<bracket>[^\[\]\n]+)\](?!\()"
@@ -191,11 +195,51 @@ def kokoro_synth(text: str, voice: str = DEFAULT_KOKORO_VOICE, speed: float = 1.
     return save(kokoro_render(text, voice, speed))
 
 
+def _swedish_model():
+    with _lock:
+        if not _swedish_models:
+            import torch
+            from kokoro_sv import SwedishKokoro
+            device = "mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu")
+            model = SwedishKokoro(device=device)
+            model.g2p.preserve_line_breaks = True
+            _swedish_models[device] = model
+        return next(iter(_swedish_models.values()))
+
+
+def swedish_render(text: str, voice: str = DEFAULT_SWEDISH_VOICE, speed: float = 1.0) -> np.ndarray:
+    """Keep phrasing intact, splitting only at the model's phoneme limit."""
+    if voice not in SWEDISH_VOICES:
+        raise ValueError(f"unknown Swedish voice {voice!r}")
+    model = _swedish_model()
+    vocab = model.model.vocab
+
+    def pieces(part):
+        ipa = model.g2p(part).replace("ʏ", "y")
+        count = sum(vocab.get(char) is not None for char in ipa)
+        if count <= 510:
+            return [part] if count else []
+        boundaries = [m.end() for m in re.finditer(r"[.!?;:,—]\s+|\n+", part) if m.end() < len(part)]
+        if not boundaries:
+            boundaries = [m.end() for m in re.finditer(r"\s+", part) if m.end() < len(part)]
+        if not boundaries:
+            raise ValueError("Swedish speech contains a word exceeding the model context")
+        middle = min(boundaries, key=lambda index: abs(index - len(part) / 2))
+        return pieces(part[:middle]) + pieces(part[middle:])
+
+    audio = [model.synthesize(part, voice=voice, speed=speed) for part in pieces(text)]
+    if not audio:
+        raise NoAudioError("Swedish Kokoro produced no audio")
+    return np.concatenate(audio)
+
+
 def line_engine(line: dict) -> str:
     """Return the engine selected by a script line."""
     requested = line.get("engine")
     if requested and requested != "auto":
         return str(requested)
+    if line.get("voice") in SWEDISH_VOICES or line.get("language") in {"sv", "sv-SE", "Swedish", "swedish"}:
+        return "kokoro-sv"
     voice = line.get("voice") or DEFAULT_KOKORO_VOICE
     return "qwen" if voice in QWEN_SPEAKERS else "kokoro"
 
@@ -214,6 +258,19 @@ def _render_line(line: dict) -> np.ndarray:
 
     voice = line.get("voice") or DEFAULT_KOKORO_VOICE
     engine = line_engine(line)
+    if engine == "kokoro-sv":
+        return trim_edge_silence(swedish_render(
+            line["text"], voice if voice in SWEDISH_VOICES else DEFAULT_SWEDISH_VOICE,
+            float(line.get("speed") or 1.0),
+        ))
+    if engine == "say":
+        if not line.get("voice") or "_" in voice or voice in QWEN_SPEAKERS or voice in SWEDISH_VOICES:
+            voice = "Alva" if line.get("language") in {
+                "sv", "sv-SE", "Swedish", "swedish"
+            } else DEFAULT_SAY_VOICE
+        return trim_edge_silence(
+            say_render(line["text"], voice, float(line.get("speed") or 1.0))
+        )
     if engine == "qwen":
         audio, rate = qwen_render(
             line["text"],
@@ -403,6 +460,9 @@ def load_model(engine: str, voice: str = DEFAULT_KOKORO_VOICE) -> None:
         _voice(voice)
         _pipeline(voice[0] if voice[:1] in KOKORO_LANGS else "a")
         return
+    if engine == "kokoro-sv":
+        _swedish_model()
+        return
     if engine == "qwen":
         _qwen()
         return
@@ -416,6 +476,7 @@ def loaded_models() -> dict[str, list[str]]:
         return {
             "kokoro": sorted(_pipelines),
             "qwen": sorted(_qwen_models),
+            "kokoro-sv": sorted(_swedish_models),
         }
     finally:
         if acquired:
@@ -424,11 +485,13 @@ def loaded_models() -> dict[str, list[str]]:
 
 def unload_models(engine: str = "all") -> None:
     """Release cached speech models from this process."""
-    if engine not in {"all", "kokoro", "qwen"}:
+    if engine not in {"all", "kokoro", "kokoro-sv", "qwen"}:
         raise ValueError(f"unknown speech engine {engine!r}")
     with _lock:
         if engine in {"all", "kokoro"}:
             _pipelines.clear()
+        if engine in {"all", "kokoro-sv"}:
+            _swedish_models.clear()
         if engine in {"all", "qwen"}:
             _qwen_models.clear()
     gc.collect()
@@ -481,6 +544,26 @@ def play(path: Path, stop_event: threading.Event | None = None) -> None:
             proc.wait()
     if proc.returncode:
         raise subprocess.CalledProcessError(proc.returncode, proc.args)
+
+
+def say_render(text: str, voice: str = DEFAULT_SAY_VOICE, speed: float = 1.0) -> np.ndarray:
+    """Render macOS speech to samples for mixed-language playback and replay."""
+    with tempfile.TemporaryDirectory(prefix="agyspeak-say-") as directory:
+        path = Path(directory) / "speech.wav"
+        result = subprocess.run(
+            ["say", "-v", voice, "-r", str(round(175 * speed)),
+             "-o", str(path), "--file-format=WAVE", "--data-format=LEI16@24000",
+             "-f", "-"],
+            input=text, capture_output=True, text=True,
+        )
+        if result.returncode:
+            raise RuntimeError(result.stderr.strip() or f"say exited {result.returncode}")
+        audio, rate = sf.read(path, dtype="float32")
+    if not audio.size:
+        raise NoAudioError("say produced no audio")
+    if audio.ndim > 1:
+        audio = audio.mean(axis=1)
+    return resample(audio, rate, KOKORO_RATE)
 
 
 def say(text: str, voice: str = DEFAULT_SAY_VOICE, rate: int | None = None) -> None:

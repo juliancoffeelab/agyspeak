@@ -5,9 +5,10 @@ from __future__ import annotations
 import re
 import unicodedata
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from agyspeak.speech_markup import protect_tags, MARKER_PATTERN
 
-from agyspeak.terminal_math import parsed_text_blocks, text_blocks
+from agyspeak.terminal_math import parsed_text_blocks
 
 _SUBSCRIPTED_CAPITAL = re.compile(r"(?<!\w)([A-Z])_([0-9]+)(?!\w)")
 _ISOLATED_CAPITAL = re.compile(r"(?<!\w)([B-HJ-NP-TV-Z])(?!\w)")
@@ -21,6 +22,11 @@ NARRATION_CHUNK_LIMIT = 280
 class SpeechChunk:
     text: str
     pause_before: float = 0.0
+    language: str = "en"
+    voice: str | None = None
+    engine: str | None = None
+    speed: float | None = None
+    instruct: str | None = None
 
 _LETTER_NAMES = {
     "A": "ay",
@@ -92,23 +98,25 @@ def _safe_char(char: str) -> str:
     return " "
 
 
-def normalize_for_speech(text: str) -> str:
+def normalize_for_speech(text: str, language: str = "en", *, preserve_lines: bool = False) -> str:
     """Expand visual notation and remove characters Kokoro cannot pronounce."""
     text = unicodedata.normalize("NFKC", text)
     text = _SQUARED.sub(" squared", text)
     text = _CUBED.sub(" cubed", text)
     for symbol, spoken in _SPOKEN_SYMBOLS:
         text = text.replace(symbol, spoken)
-    text = _SUBSCRIPTED_CAPITAL.sub(_letter_with_subscript, text)
-    text = _ISOLATED_CAPITAL.sub(lambda match: _LETTER_NAMES[match.group(1)], text)
+    if language == "en":
+        text = _SUBSCRIPTED_CAPITAL.sub(_letter_with_subscript, text)
+        text = _ISOLATED_CAPITAL.sub(lambda match: _LETTER_NAMES[match.group(1)], text)
     text = "".join(_safe_char(char) for char in text)
+    if preserve_lines:
+        return "\n".join(re.sub(r"[^\S\n]+", " ", line).strip() for line in text.split("\n")).strip()
     return re.sub(r"\s+", " ", text).strip()
 
 
 def for_speech(markdown: str) -> str:
     """Return readable prose without Markdown syntax or fenced source code."""
-    paragraphs = [normalize_for_speech(block) for block in text_blocks(markdown)]
-    return "\n\n".join(part for part in paragraphs if part)
+    return "\n\n".join(chunk.text for chunk in narration_chunks(markdown, limit=10**9))
 
 
 def narration_chunks(
@@ -141,14 +149,48 @@ def narration_chunks(
                 chunks.append(unit)
         return chunks
 
+    marked, tags = protect_tags(markdown)
+    stack: list[tuple[str, dict]] = []
+    options: dict = {}
     result: list[SpeechChunk] = []
-    for block in parsed_text_blocks(markdown):
+    pending: list[str] = []
+
+    def flush():
+        if not pending:
+            return
+        explicit = any(name == "speak" for name, _ in stack)
+        language = options.get("language", "en")
+        spoken = normalize_for_speech("\n\n".join(pending), language, preserve_lines=explicit)
+        pending.clear()
+        if not spoken:
+            return
+        if result and not any(char.isalnum() for char in spoken):
+            result[-1] = replace(result[-1], text=result[-1].text + spoken)
+            return
+        parts = [spoken] if explicit else split_spoken(spoken)
+        result.extend(SpeechChunk(part, **options) for part in parts)
+
+    for block in parsed_text_blocks(marked, speech_tags=tags, line_breaks=True):
         if block.kind == "break":
             continue
-        spoken = normalize_for_speech(block.text)
-        if not spoken:
-            continue
-        result.extend(SpeechChunk(part) for part in split_spoken(spoken))
+        for span in re.split(f"({MARKER_PATTERN.pattern})", block.text):
+            if span in tags:
+                flush()
+                name, closing, attrs = tags[span].control()
+                if closing:
+                    if not stack or stack[-1][0] != name:
+                        raise ValueError(f"unmatched </{name}> speech tag")
+                    _, options = stack.pop()
+                else:
+                    stack.append((name, options))
+                    options = {**options, **attrs}
+            elif span.strip():
+                pending.append(span)
+        if not any(name == "speak" for name, _ in stack):
+            flush()
+    flush()
+    if stack:
+        raise ValueError(f"unclosed <{stack[-1][0]}> speech tag")
     return result
 
 

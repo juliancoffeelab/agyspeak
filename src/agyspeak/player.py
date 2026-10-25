@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 from agyspeak import tts
+from agyspeak.speech_markup import SPEECH_FIELDS, validate_options
 
 WORDS_PER_SECOND = 2.6  # rough Kokoro pace at speed 1.0, for the estimate we return
 
@@ -39,6 +40,7 @@ def start(lines: list[dict], pause: float = 0.4) -> tuple[Path, float]:
                 duration += tts.pause_before(line, pause)
         return duration
 
+    lines = [{**line, **validate_options({key: value for key, value in line.items() if key in SPEECH_FIELDS})} for line in lines]
     tts.SPEECH_DIR.mkdir(parents=True, exist_ok=True)
     created = datetime.now()
     request_id = created.strftime("%Y%m%d-%H%M%S-%f")
