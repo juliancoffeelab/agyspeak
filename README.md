@@ -15,8 +15,8 @@ on your Antigravity subscription with no API key.
 ## Run
 
 ```sh
-uv run agyspeak                      # default model gemini-3.7-flash-high
-uv run agyspeak -m gemini-3.7-flash-low
+uv run agyspeak                      # default model gemini-3.8-flash-medium
+uv run agyspeak -m gemini-3.8-flash-low
 uv run agyspeak -c                   # resume the last conversation
 uv run agyspeak -l                   # list saved sessions
 uv run agyspeak --conversation 2bbead17   # resume one by id (prefix is fine)

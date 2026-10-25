@@ -10,7 +10,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-DEFAULT_MODEL = "gemini-3.7-flash-high"
+DEFAULT_MODEL = "gemini-3.8-flash-medium"
 DEFAULT_VOICE_PROMPT = "Listen to this voice message and respond to it."
 # agy has an unavoidable five-minute default and treats zero/negative values as
 # immediate expiry. This is Go's largest whole-second duration (~292 years).
