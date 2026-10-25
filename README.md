@@ -66,19 +66,21 @@ current one.
 ## How it works
 
 Each turn runs `agy --print --output-format stream-json`, with `--conversation <id>`
-after the first turn so context carries over. Audio is attached by referencing the
-file as `@/absolute/path.wav` in the prompt.
+after the first turn so context carries over. Each audio turn includes the absolute
+recording path and asks Gemini to open it with its native file-viewing tool. That
+tool returns the WAV as native audio, so Gemini can hear pronunciation and prosody.
 
 On the first turn of a new conversation a short preamble is prepended telling the
-model it is a general multimodal assistant, that audio arrives as input, and that
+model it is a general multimodal assistant, how to open native audio, and that
 language learning is a common use. Override it with `--system "..."` or drop it
 with `--no-system`. Resumed conversations already carry it in their history.
 
 Things learned the hard way:
 
-- `agy` only attaches absolute `@/paths` that live under your home directory, and
-  `--add-dir` does not change that. A path relative to its cwd works from anywhere.
-  A file it refuses is silently ignored and the model tries to open it with tools.
+- `agy --print` sends `@/path.wav` references as plain text. Its native file-viewing
+  tool (`view_file`, named `read_file` in some toolsets) returns audio to the model.
+  Every audio turn explicitly requests that tool, including in resumed sessions.
+  No shell permission bypass or external transcription service is needed.
 - The model knows your macOS username regardless of where recordings live: agy's
   own system prompt includes its home, scratch, and MCP directories. Hiding it
   would mean faking `$HOME`, which would break agy's auth and config.

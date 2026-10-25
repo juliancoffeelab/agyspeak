@@ -18,8 +18,10 @@ UNBOUNDED_PRINT_TIMEOUT = "2562047h47m16s"
 DEFAULT_PREAMBLE = """\
 You are a general multimodal assistant talking with the user in a terminal chat. \
 This is not a coding session. The user may type or send voice recordings, and you \
-receive that audio directly as input, so listen to it rather than opening the file \
-with tools. A common use is language learning: transcribe or answer what was said, \
+receive a path to each recording. Open it with the native file-viewing tool \
+(view_file, or read_file in some toolsets), which returns audio you can listen to. \
+Do not use shell commands or external transcription tools to process recordings. \
+A common use is language learning: transcribe or answer what was said, \
 and when asked comment on pronunciation, accent, grammar, or word choice, with the \
 level of detail the user asks for. Otherwise behave as a helpful conversational \
 assistant on any topic. Do not use file or shell tools unless the user asks for \
@@ -101,8 +103,19 @@ class AgyClient:
             return text
         if not text:
             text = DEFAULT_VOICE_PROMPT
-        # `agy` attaches files referenced as @/absolute/path (must live under $HOME).
-        return f"{text} @{audio.resolve()}"
+        # Print mode sends @paths as text. The native file viewer returns the WAV
+        # as model-visible audio; repeat this instruction for resumed chats too.
+        path = json.dumps(str(audio.resolve()), ensure_ascii=False)
+        return (
+            f"{text}\n\n"
+            f"Audio recording: {path}\n"
+            "For this recording, use the native file-viewing tool (view_file, or "
+            "read_file in some toolsets) to open the file and listen to the "
+            "returned native audio. This is an audio file, not text. Do not use "
+            "shell commands, scripts, external transcription tools, or inspect "
+            "the workspace. If the viewer cannot return audio, say so instead "
+            "of guessing what was said."
+        )
 
     def send(
         self,
