@@ -78,7 +78,11 @@ further tools. The denied operation stays blocked; the recording is not resent.
 ## How it works
 
 Each turn runs `agy --print --output-format stream-json`, with `--conversation <id>`
-after the first turn so context carries over. Each audio turn includes the absolute
+after the first turn so context carries over. AGSpeak passes `--sandbox` to isolate
+shell commands. Command approval still follows your existing Antigravity policy;
+AGSpeak does not grant automatic command approval or change global settings.
+
+Each audio turn includes the absolute
 recording path and asks Gemini to open it with its native file-viewing tool. That
 tool returns the WAV as native audio, so Gemini can hear pronunciation and prosody.
 

@@ -99,6 +99,7 @@ class AgyClient:
             "--print-timeout",
             UNBOUNDED_PRINT_TIMEOUT,
             "--disable-slash-commands",
+            "--sandbox",
         ]
         if self.effort:
             argv += ["--effort", self.effort]
