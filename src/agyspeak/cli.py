@@ -334,9 +334,45 @@ def _render_turn(turn: Turn, model: str) -> None:
     )
 
 
+def _tool_description(step: dict) -> str:
+    info = step.get("tool_info") or {}
+    name = step.get("tool_name") or info.get("name") or "tool"
+    params = info.get("parameters") or {}
+    path = params.get("Path")
+    if path:
+        detail = _display_path(Path(path))
+        start, end = params.get("StartLine"), params.get("EndLine")
+        if start is not None:
+            detail += f" · lines {start}–{end}" if end is not None else f" · from line {start}"
+        if params.get("ByteOffset") is not None:
+            detail += f" · byte {params['ByteOffset']}"
+    else:
+        def brief(value) -> str:
+            text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+            text = " ".join(text.split())
+            return text if len(text) <= 140 else text[:139] + "…"
+
+        if params.get("CommandLine"):
+            detail = params["CommandLine"]
+        else:
+            # Show actual arguments for every tool, including tools we haven't
+            # seen before. Put the stated purpose first when one is provided.
+            detail = brief(params["toolSummary"]) if params.get("toolSummary") else ""
+            arguments = "; ".join(
+                f"{key}={brief(value)}"
+                for key, value in params.items() if key != "toolSummary"
+            )
+            detail = "; ".join(part for part in (detail, arguments) if part)
+    detail = " ".join(str(detail).split())
+    if len(detail) > 240:
+        detail = detail[:239] + "…"
+    return f"{name} · {detail}" if detail else name
+
+
 def _send(client: AgyClient, text: str, clip: Path | None, voice_mode: VoiceMode) -> str:
     label = "voice" if clip else "text"
     is_first = client.conversation_id is None
+    shown_tools: set[tuple] = set()
     with console.status(f"[bold blue]thinking[/bold blue] [dim]({label})[/dim]") as status:
 
         def on_event(event: dict) -> None:
@@ -344,7 +380,12 @@ def _send(client: AgyClient, text: str, clip: Path | None, voice_mode: VoiceMode
                 return
             step = event.get("step_update", {})
             if step.get("step_type") == "tool":
-                status.update(f"[bold blue]tool[/bold blue] [dim]{step.get('tool_name')}[/dim]")
+                description = _tool_description(step)
+                status.update(Text(f"tool · {description}", style="blue"))
+                key = (step.get("conversation_id"), step.get("step_index"))
+                if key not in shown_tools:
+                    console.print(Text(f"↳ {description}", style="dim"))
+                    shown_tools.add(key)
             elif step.get("step_type") == "agent_response":
                 status.update("[bold blue]responding[/bold blue]")
 

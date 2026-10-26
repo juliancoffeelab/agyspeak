@@ -204,3 +204,40 @@ def test_voice_mode_routes_swedish_and_returns_to_selected_voice(monkeypatch) ->
     ]
     assert calls[0][1]['engine'] == 'auto'
     assert calls[0][1]['language'] == 'sv'
+
+
+def test_tool_description_includes_file_and_read_range() -> None:
+    path = Path.home() / '.cache/agyspeak/recordings/clip.wav'
+    assert cli._tool_description({
+        'tool_name': 'read_file', 'tool_info': {'parameters': {
+            'Path': str(path), 'StartLine': 1, 'EndLine': 20, 'ByteOffset': 500,
+        }},
+    }) == 'read_file · ~/.cache/agyspeak/recordings/clip.wav · lines 1–20 · byte 500'
+
+
+def test_tool_description_shows_command_without_interpreting_markup() -> None:
+    assert cli._tool_description({
+        'tool_name': 'run_command', 'tool_info': {'parameters': {'CommandLine': 'tail -n 20 [file]'}},
+    }) == 'run_command · tail -n 20 [file]'
+    assert cli._tool_description({'tool_name': 'read_file'}) == 'read_file'
+
+
+def test_tool_description_shows_search_query_and_url() -> None:
+    for tool, params in [
+        ('search_web', {'query': 'Swedish pronunciation dvärgarnas'}),
+        ('read_url_content', {'Url': 'https://example.com/svenska'}),
+    ]:
+        description = cli._tool_description({'tool_name': tool, 'tool_info': {'parameters': params}})
+        assert next(iter(params.values())) in description
+
+
+def test_unknown_tool_shows_arguments_and_bounds_multiline_details() -> None:
+    description = cli._tool_description({'tool_name': 'new_tool', 'tool_info': {'parameters': {
+        'toolSummary': 'Look up a reference', 'request': {'term': 'hej'},
+        'text': 'a long line\n' * 100,
+    }}})
+    assert 'Look up a reference' in description
+    assert 'request={"term": "hej"}' in description
+    assert '\n' not in description
+    assert len(description) <= len('new_tool · ') + 240
+    assert description.endswith('…')
