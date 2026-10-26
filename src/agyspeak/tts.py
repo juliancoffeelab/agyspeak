@@ -10,12 +10,21 @@ import re
 import subprocess
 import threading
 import tempfile
+import warnings
 from datetime import datetime
 from pathlib import Path
 
 import numpy as np
 import soundfile as sf
 from agyspeak.speech_markup import SWEDISH_VOICES
+
+# The Swedish pronunciation model uses this supported but experimental Torch API.
+warnings.filterwarnings(
+    "ignore",
+    message=r"The PyTorch API of nested tensors is in prototype stage.*",
+    category=UserWarning,
+    module=r"torch\.nn\.modules\.transformer$",
+)
 
 SPEECH_DIR = Path.home() / ".cache" / "agyspeak" / "speech"
 KOKORO_REPO = "hexgrad/Kokoro-82M"
