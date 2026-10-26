@@ -12,7 +12,7 @@ from mdit_py_plugins.dollarmath import dollarmath_plugin
 from mdit_py_plugins.texmath import texmath_plugin
 from pylatexenc.latex2text import LatexNodes2Text
 from rich.markdown import Markdown
-from agyspeak.speech_markup import protect_tags, visible_text
+from agyspeak.speech_markup import MARKER_PATTERN, protect_tags, visible_text
 
 _CONVERTER = LatexNodes2Text()
 _OPERATORS = "→←↔⇒⇐⇔⟶⟵≈≠≤≥×·±="
@@ -58,9 +58,27 @@ def _convert_inline_math(token: Token) -> None:
 def terminal_tokens(markdown: str) -> list[Token]:
     """Parse Markdown and replace math nodes with terminal-safe text nodes."""
     marked, tags = protect_tags(markdown)
+    speech_depth = 0
+
+    def hide_tag(match):
+        nonlocal speech_depth
+        tag = tags.get(match.group())
+        if tag is None:
+            return match.group()
+        try:
+            _, closing, _ = tag.control()
+        except ValueError:
+            return ""
+        speech_depth = max(0, speech_depth - 1) if closing else speech_depth + 1
+        return ""
+
     def reveal(token):
-        if token.type in {'text', 'code_inline', 'fence', 'code_block'}:
-            token.content = visible_text(token.content, tags, literal=token.type != 'text')
+        if token.type == 'text':
+            token.content = MARKER_PATTERN.sub(hide_tag, token.content)
+        elif token.type in {'code_inline', 'fence', 'code_block'}:
+            token.content = visible_text(token.content, tags, literal=True)
+        elif token.type == 'softbreak' and speech_depth:
+            token.type = 'hardbreak'
         for child in token.children or []:
             reveal(child)
     result: list[Token] = []

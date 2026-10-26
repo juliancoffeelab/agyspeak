@@ -74,3 +74,17 @@ def test_swedish_context_split_keeps_all_text_and_adds_no_silence(monkeypatch):
     assert ''.join(text for text, _ in calls) == source
     assert all(opts == {'voice': 'Lars', 'speed': .9} for _, opts in calls)
     assert len(result) == 3 * len(calls)
+
+
+def test_display_preserves_scoped_poetry_line_breaks_and_restores_prose():
+    source = ('Before\nprose.\n\n<speak voice="Lars">\n'
+              '**First** line\n<speak voice="Elsa">Second line</speak>\n'
+              'Third line\n\nFourth line\n</speak>\n\nAfter\nprose.')
+    lines = [line.strip() for line in render(source).splitlines() if line.strip()]
+    assert lines == ['Before prose.', 'First line', 'Second line',
+                     'Third line', 'Fourth line', 'After prose.']
+
+
+def test_literal_speech_tag_does_not_change_prose_line_breaks():
+    lines = [line.strip() for line in render('`<speak>` example\ncontinues here.').splitlines() if line.strip()]
+    assert lines == ['<speak> example continues here.']
