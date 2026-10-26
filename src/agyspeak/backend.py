@@ -16,6 +16,14 @@ TURN_LOG_DIR = Path.home() / ".cache" / "agyspeak" / "turns"
 
 DEFAULT_MODEL = "gemini-3.8-flash-medium"
 DEFAULT_VOICE_PROMPT = "Listen to this voice message and respond to it."
+DENIAL_RECOVERY_PROMPT = (
+    "The tool request was denied. The denial stands: do not retry it or access "
+    "the same resource through another tool. Respond to my preceding request "
+    "now using the conversation and any audio already available. Do not call "
+    "any more tools or inspect conversation logs. If you lack information "
+    "needed to answer, explain what is missing instead of guessing. "
+    "Return only the answer addressed to me, without planning or thinking text."
+)
 # agy has an unavoidable five-minute default and treats zero/negative values as
 # immediate expiry. This is Go's largest whole-second duration (~292 years).
 UNBOUNDED_PRINT_TIMEOUT = "2562047h47m16s"
@@ -123,6 +131,25 @@ class AgyClient:
         )
 
     def send(
+        self,
+        text: str,
+        audio: Path | None = None,
+        on_event: Callable[[Event], None] | None = None,
+    ) -> Turn:
+        turn = self._send_once(text, audio, on_event)
+        if turn.response.strip() or not turn.denied_actions or not self.conversation_id:
+            return turn
+        # Print mode exits on some permission denials. Continue once without
+        # replaying the recording or granting the denied operation.
+        recovery = self._send_once(DENIAL_RECOVERY_PROMPT, on_event=on_event)
+        recovery.duration += turn.duration
+        recovery.notes = turn.notes + [
+            "Tool request denied; continued once to request an answer without tools."
+        ] + recovery.notes
+        recovery.denied_actions = turn.denied_actions + recovery.denied_actions
+        return recovery
+
+    def _send_once(
         self,
         text: str,
         audio: Path | None = None,

@@ -68,3 +68,45 @@ def test_turn_log_preserves_raw_events_and_diagnostics(monkeypatch, tmp_path: Pa
     assert first.response == 'Hej!'
     assert first.notes == ['diagnostic message']
     assert len(events) == 3
+
+
+def test_empty_denied_turn_continues_once_in_same_conversation(monkeypatch) -> None:
+    from agyspeak.backend import DENIAL_RECOVERY_PROMPT, Turn
+    client = AgyClient()
+    denied = Turn(conversation_id='same-chat', denied_actions=[{'action': 'RunCommand'}], duration=2)
+    recovered = Turn(response='Here is the answer.', conversation_id='same-chat', duration=3)
+    calls = []
+    def send_once(text, audio=None, on_event=None):
+        calls.append((text, audio, client.conversation_id, on_event))
+        client.conversation_id = 'same-chat'
+        return denied if len(calls) == 1 else recovered
+    monkeypatch.setattr(client, '_send_once', send_once)
+    callback = lambda event: None
+    clip = Path('clip.wav')
+    result = client.send('Listen', clip, callback)
+    assert calls == [('Listen', clip, None, callback), (DENIAL_RECOVERY_PROMPT, None, 'same-chat', callback)]
+    assert result.response == 'Here is the answer.'
+    assert result.duration == 5
+    assert result.denied_actions == denied.denied_actions
+
+
+def test_repeated_denial_does_not_loop(monkeypatch) -> None:
+    from agyspeak.backend import Turn
+    client = AgyClient(conversation_id='same-chat')
+    calls = []
+    def send_once(*args, **kwargs):
+        calls.append(args)
+        return Turn(denied_actions=[{'action': 'RunCommand'}])
+    monkeypatch.setattr(client, '_send_once', send_once)
+    assert client.send('Listen').response == ''
+    assert len(calls) == 2
+
+
+def test_answer_with_denied_tool_is_not_retried(monkeypatch) -> None:
+    from agyspeak.backend import Turn
+    client = AgyClient(conversation_id='same-chat')
+    turn = Turn(response='Already answered.', denied_actions=[{'action': 'RunCommand'}])
+    calls = []
+    monkeypatch.setattr(client, '_send_once', lambda *args, **kwargs: calls.append(args) or turn)
+    assert client.send('Hello') is turn
+    assert len(calls) == 1

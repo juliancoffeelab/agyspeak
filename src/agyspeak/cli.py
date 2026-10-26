@@ -318,8 +318,7 @@ def _render_turn(turn: Turn, model: str) -> None:
     if turn.denied_actions:
         names = ", ".join(a.get("display_name", a.get("action", "?")) for a in turn.denied_actions)
         console.print(
-            f"[yellow]agy auto-denied tool use ({names}). "
-            "Start with --yolo to let it run tools.[/yellow]"
+            f"[yellow]agy blocked tool use ({names}).[/yellow]"
         )
     body = turn.response.strip()
     if not body:

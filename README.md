@@ -70,6 +70,11 @@ issues. The `init` event identifies the conversation. Logs stay local and are
 kept until you delete them.
 
 
+If Antigravity blocks a tool request and returns no answer, AGSpeak continues
+the same conversation once, asking for an answer from existing context without
+further tools. The denied operation stays blocked; the recording is not resent.
+
+
 ## How it works
 
 Each turn runs `agy --print --output-format stream-json`, with `--conversation <id>`
