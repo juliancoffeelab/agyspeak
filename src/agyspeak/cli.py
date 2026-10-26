@@ -376,6 +376,11 @@ def _send(client: AgyClient, text: str, clip: Path | None, voice_mode: VoiceMode
     with console.status(f"[bold blue]thinking[/bold blue] [dim]({label})[/dim]") as status:
 
         def on_event(event: dict) -> None:
+            if event.get("event") == "audio_part":
+                description = f"audio part {event['index']}/{event['total']} · {_display_path(Path(event['path']))}"
+                console.print(Text(f"↳ {description}", style="dim"))
+                status.update(Text(description, style="blue"))
+                return
             if event.get("event") != "step_update":
                 return
             step = event.get("step_update", {})

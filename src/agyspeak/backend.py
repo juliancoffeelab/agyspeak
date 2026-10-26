@@ -137,6 +137,48 @@ class AgyClient:
         audio: Path | None = None,
         on_event: Callable[[Event], None] | None = None,
     ) -> Turn:
+        from agyspeak.audio import prepare_for_model
+
+        reference = text.strip()
+        if audio is None and reference.startswith("@") and "\n" not in reference:
+            candidate = Path(reference[1:].strip("\"'")).expanduser()
+            if candidate.suffix.lower() in {".wav", ".mp3", ".m4a", ".ogg", ".flac"} and candidate.is_file():
+                audio, text = candidate, ""
+        parts = prepare_for_model(audio) if audio is not None and audio.is_file() else [audio]
+        if len(parts) == 1:
+            return self._send_with_recovery(text, parts[0], on_event)
+
+        started = time.monotonic()
+        request = text.strip() or DEFAULT_VOICE_PROMPT
+        for index, part in enumerate(parts, 1):
+            if on_event:
+                on_event({"event": "audio_part", "index": index, "total": len(parts), "path": str(part)})
+            if index < len(parts):
+                acknowledgment = f"Received part {index}/{len(parts)}."
+                prompt = (
+                    f"This is part {index}/{len(parts)} of one recording, in chronological order. "
+                    f"The user's request for the full recording is: {request}\n"
+                    "Listen and retain the content for the following parts. Do not answer yet; "
+                    f"reply only with exactly: {acknowledgment}"
+                )
+            else:
+                prompt = (
+                    f"This is the final part {index}/{len(parts)} of the recording. "
+                    "Listen, then answer the user's request using all parts in order:\n" + request
+                )
+            turn = self._send_with_recovery(prompt, part, on_event)
+            if index < len(parts) and turn.response.strip() != acknowledgment:
+                turn.notes.append(f"Stopped at audio part {index}/{len(parts)}: no acknowledgment received.")
+                break
+        turn.duration = time.monotonic() - started
+        return turn
+
+    def _send_with_recovery(
+        self,
+        text: str,
+        audio: Path | None = None,
+        on_event: Callable[[Event], None] | None = None,
+    ) -> Turn:
         turn = self._send_once(text, audio, on_event)
         if turn.response.strip() or not turn.denied_actions or not self.conversation_id:
             return turn

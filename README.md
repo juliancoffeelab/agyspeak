@@ -64,17 +64,22 @@ Recordings are 16 kHz mono WAV under `~/.cache/agyspeak/recordings/`
 `~/.cache/agyspeak/sessions.jsonl`; on exit the app prints how to resume the
 current one.
 
+Long WAV recordings are split locally into parts of at most three minutes,
+without lossy compression or changing the original. AGSpeak sends them in order
+within the same conversation, asks for an acknowledgment after each intermediate
+part, then asks for the answer after the final part. The terminal shows progress
+and each file being opened. If a part fails or is blocked, processing stops.
+A bare `@/path/to/recording.wav` at the chat prompt uses the same audio handling.
+
 Raw CLI output is saved for every turn under `~/.cache/agyspeak/turns/`, in
 separate timestamped `.log` files. These preserve the JSON event stream and CLI
 diagnostics before parsing, including partial turns, for investigating output
 issues. The `init` event identifies the conversation. Logs stay local and are
 kept until you delete them.
 
-
 If Antigravity blocks a tool request and returns no answer, AGSpeak continues
 the same conversation once, asking for an answer from existing context without
 further tools. The denied operation stays blocked; the recording is not resent.
-
 
 ## How it works
 

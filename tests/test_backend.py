@@ -111,3 +111,44 @@ def test_answer_with_denied_tool_is_not_retried(monkeypatch) -> None:
     monkeypatch.setattr(client, '_send_once', lambda *args, **kwargs: calls.append(args) or turn)
     assert client.send('Hello') is turn
     assert len(calls) == 1
+
+
+def test_audio_parts_are_sent_in_order_before_final_answer(monkeypatch, tmp_path: Path):
+    from agyspeak import audio as audio_module
+    from agyspeak.backend import Turn
+    original = tmp_path / 'long.wav'
+    original.touch()
+    parts = [tmp_path / f'part-{i}.wav' for i in range(3)]
+    monkeypatch.setattr(audio_module, 'prepare_for_model', lambda path: parts)
+    client = AgyClient()
+    calls = []
+    def send_part(text, audio, on_event):
+        calls.append((text, audio, client.conversation_id))
+        client.conversation_id = 'same-chat'
+        return Turn(response=f'Received part {len(calls)}/3.' if len(calls) < 3 else 'Full answer.')
+    monkeypatch.setattr(client, '_send_with_recovery', send_part)
+    events = []
+    result = client.send('Explain the Swedish words.', original, events.append)
+    assert [call[1] for call in calls] == parts
+    assert [call[2] for call in calls] == [None, 'same-chat', 'same-chat']
+    assert 'final part 3/3' in calls[-1][0]
+    assert 'Explain the Swedish words.' in calls[-1][0]
+    assert result.response == 'Full answer.'
+    assert [e['index'] for e in events] == [1, 2, 3]
+
+
+def test_audio_part_failure_stops_remaining_parts(monkeypatch, tmp_path: Path):
+    from agyspeak import audio as audio_module
+    from agyspeak.backend import Turn
+    original = tmp_path / 'long.wav'
+    original.touch()
+    monkeypatch.setattr(audio_module, 'prepare_for_model', lambda path: [Path('one.wav'), Path('two.wav')])
+    client = AgyClient()
+    calls = []
+    def send_part(*args):
+        calls.append(args)
+        return Turn(response='This request was blocked by Gemini filters.')
+    monkeypatch.setattr(client, '_send_with_recovery', send_part)
+    result = client.send('Listen.', original)
+    assert len(calls) == 1
+    assert 'Stopped at audio part 1/2' in result.notes[-1]

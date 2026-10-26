@@ -14,6 +14,37 @@ import soundfile as sf
 SAMPLE_RATE = 16_000
 CHANNELS = 1
 RECORDINGS_DIR = Path.home() / ".cache" / "agyspeak" / "recordings"
+# Keep each native-audio read small without lossy compression.
+MODEL_AUDIO_SECONDS = 180
+MODEL_AUDIO_BYTES = 12_000_000
+
+
+def prepare_for_model(path: Path) -> list[Path]:
+    """Split long WAVs on sample boundaries; retain the full original."""
+    if path.suffix.lower() != ".wav":
+        return [path]
+    with sf.SoundFile(path) as source:
+        bytes_per_frame = source.channels * (2 if source.subtype == "PCM_16" else 8)
+        frames_per_part = min(
+            int(MODEL_AUDIO_SECONDS * source.samplerate),
+            (MODEL_AUDIO_BYTES - 4096) // bytes_per_frame,
+        )
+        if source.frames <= frames_per_part:
+            return [path]
+        directory = path.parent / f"{path.stem}.parts"
+        directory.mkdir(exist_ok=True)
+        parts = []
+        while source.tell() < source.frames:
+            count = min(frames_per_part, source.frames - source.tell())
+            target = directory / f"part-{len(parts) + 1:03d}.wav"
+            if (target.exists() and target.stat().st_mtime_ns >= path.stat().st_mtime_ns
+                    and sf.info(target).frames == count):
+                source.seek(source.tell() + count)
+            else:
+                samples = source.read(count, dtype="float64", always_2d=True)
+                sf.write(target, samples, source.samplerate, subtype=source.subtype)
+            parts.append(target)
+        return parts
 
 
 @dataclass
