@@ -5,10 +5,14 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import tempfile
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
+
+TURN_LOG_DIR = Path.home() / ".cache" / "agyspeak" / "turns"
 
 DEFAULT_MODEL = "gemini-3.8-flash-medium"
 DEFAULT_VOICE_PROMPT = "Listen to this voice message and respond to it."
@@ -48,6 +52,7 @@ Event = dict
 @dataclass
 class Turn:
     response: str = ""
+    log_path: Path | None = None
     conversation_id: str | None = None
     status: str = ""
     usage: dict = field(default_factory=dict)
@@ -126,37 +131,44 @@ class AgyClient:
         prompt = self.build_prompt(text, audio)
         if self.preamble and not self.conversation_id:
             prompt = f"{self.preamble}\n\n{prompt}"
-        proc = subprocess.Popen(
-            self._argv(prompt),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-        )
-        turn = Turn()
-        started = time.monotonic()
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                turn.notes.append(line)
-                continue
-            if on_event:
-                on_event(event)
-            if event.get("event") == "result":
-                result = event.get("result", {})
-                turn.response = result.get("response", "")
-                turn.conversation_id = result.get("conversation_id")
-                turn.status = result.get("status", "")
-                turn.usage = result.get("usage", {})
-                turn.denied_actions = result.get("denied_actions", [])
-            elif event.get("event") == "init":
-                turn.conversation_id = event.get("conversation_id") or turn.conversation_id
-        code = proc.wait()
+        TURN_LOG_DIR.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", buffering=1,
+            prefix=datetime.now().strftime("%Y%m%d-%H%M%S-"), suffix=".log",
+            dir=TURN_LOG_DIR, delete=False,
+        ) as raw_log:
+            proc = subprocess.Popen(
+                self._argv(prompt),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+            turn = Turn(log_path=Path(raw_log.name))
+            started = time.monotonic()
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                raw_log.write(line)
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    turn.notes.append(line)
+                    continue
+                if on_event:
+                    on_event(event)
+                if event.get("event") == "result":
+                    result = event.get("result", {})
+                    turn.response = result.get("response", "")
+                    turn.conversation_id = result.get("conversation_id")
+                    turn.status = result.get("status", "")
+                    turn.usage = result.get("usage", {})
+                    turn.denied_actions = result.get("denied_actions", [])
+                elif event.get("event") == "init":
+                    turn.conversation_id = event.get("conversation_id") or turn.conversation_id
+            code = proc.wait()
         # agy's own duration_seconds is cumulative for the conversation, so time it here.
         turn.duration = time.monotonic() - started
         if code != 0 and not turn.response:

@@ -63,6 +63,13 @@ Recordings are 16 kHz mono WAV under `~/.cache/agyspeak/recordings/`
 `~/.cache/agyspeak/sessions.jsonl`; on exit the app prints how to resume the
 current one.
 
+Raw CLI output is saved for every turn under `~/.cache/agyspeak/turns/`, in
+separate timestamped `.log` files. These preserve the JSON event stream and CLI
+diagnostics before parsing, including partial turns, for investigating output
+issues. The `init` event identifies the conversation. Logs stay local and are
+kept until you delete them.
+
+
 ## How it works
 
 Each turn runs `agy --print --output-format stream-json`, with `--conversation <id>`

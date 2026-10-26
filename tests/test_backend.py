@@ -32,3 +32,39 @@ def test_first_turn_argv_uses_model_and_print_mode() -> None:
     assert "--conversation" not in argv
     timeout_index = argv.index("--print-timeout")
     assert argv[timeout_index + 1] == UNBOUNDED_PRINT_TIMEOUT
+
+
+def test_turn_log_preserves_raw_events_and_diagnostics(monkeypatch, tmp_path: Path) -> None:
+    import io
+    import json
+    from types import SimpleNamespace
+    from agyspeak import backend
+
+    raw = '\n  diagnostic message  \n' + '\n'.join([
+        json.dumps({'event': 'init', 'conversation_id': 'example-conversation'}),
+        json.dumps({'event': 'step_update', 'step_update': {
+            'step_type': 'agent_response', 'text_delta': 'Hej!', 'thinking': 'separate field',
+        }}),
+        json.dumps({'event': 'result', 'result': {
+            'response': 'Hej!', 'status': 'SUCCESS', 'conversation_id': 'example-conversation',
+        }}),
+    ]) + '\n'
+    monkeypatch.setattr(backend, 'TURN_LOG_DIR', tmp_path / 'turns')
+    monkeypatch.setattr(backend.subprocess, 'Popen', lambda *args, **kwargs: SimpleNamespace(
+        stdout=io.StringIO(raw), wait=lambda: 0,
+    ))
+    events = []
+    def on_event(event):
+        events.append(event)
+        # Output is flushed before callbacks, so partial turns survive interruption.
+        assert list((tmp_path / 'turns').glob('*.log'))[0].read_text().endswith(
+            json.dumps(event) + '\n'
+        )
+    client = AgyClient()
+    first = client.send('hello', on_event=on_event)
+    second = client.send('again')
+    assert first.log_path != second.log_path
+    assert first.log_path.read_text() == second.log_path.read_text() == raw
+    assert first.response == 'Hej!'
+    assert first.notes == ['diagnostic message']
+    assert len(events) == 3
