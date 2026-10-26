@@ -56,6 +56,7 @@ Inside the chat:
 | `/speech load …`   | load Kokoro or Qwen in the background                     |
 | `/speech unload …` | unload one engine or all speech models                    |
 | `/speech stop`     | cancel current and queued speech                          |
+| Ctrl-X             | stop speech at the prompt, keeping voice mode on           |
 | `/help`, `/quit`   |                                                          |
 
 Recordings are 16 kHz mono WAV under `~/.cache/agyspeak/recordings/`

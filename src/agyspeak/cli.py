@@ -58,6 +58,7 @@ HELP = r"""
   /speech load [kokoro [voice]|kokoro-sv|qwen]
   /speech unload [kokoro|kokoro-sv|qwen|all]
   /speech stop      stop current and queued speech
+  Ctrl-X            stop speech; keep automatic voice replies enabled
   Tab               toggle automatic voice replies
   /help             this text
   /quit, /q         exit (ctrl+d also works)
@@ -447,6 +448,10 @@ def main(
     @bindings.add("tab")
     def _toggle_voice(_event) -> None:  # noqa: ANN001
         run_in_terminal(lambda: console.print(voice_mode.toggle()))
+
+    @bindings.add("c-x")
+    def _stop_speech(_event) -> None:  # noqa: ANN001
+        run_in_terminal(lambda: console.print(_speech_command("stop", voice_mode.voice)))
 
     session: PromptSession[str] = PromptSession(
         history=FileHistory(str(HISTORY)),
