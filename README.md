@@ -30,14 +30,7 @@ switch voices or `/voices` to list them. `--voice bm_fable` selects the startup
 voice without enabling speech. The selected voice and on/off state are restored
 after restarting agyspeak, including when resuming with `-c`.
 
-For bilingual English/Swedish replies, Gemini wraps Swedish passages in
-`<speak language="sv">...</speak>`. Voice mode uses the vendored Swedish Kokoro
-voice **Klara**, then returns to your selected English voice. Swedish model
-weights download on first use. Swedish text keeps its native letter names;
-for example, `<speak language="sv">bokstaven S</speak>`. Use ordinary Swedish
-spelling inside the tags, and IPA in English explanations for individual sounds.
-The updated preamble applies to new conversations (`/new`); resumed chats keep
-their existing instructions.
+Voice mode supports English/Swedish replies, using Kokoro.
 
 Inside the chat:
 
@@ -70,50 +63,6 @@ within the same conversation, asks for an acknowledgment after each intermediate
 part, then asks for the answer after the final part. The terminal shows progress
 and each file being opened. If a part fails or is blocked, processing stops.
 A bare `@/path/to/recording.wav` at the chat prompt uses the same audio handling.
-
-Raw CLI output is saved for every turn under `~/.cache/agyspeak/turns/`, in
-separate timestamped `.log` files. These preserve the JSON event stream and CLI
-diagnostics before parsing, including partial turns, for investigating output
-issues. The `init` event identifies the conversation. Logs stay local and are
-kept until you delete them.
-
-If Antigravity blocks a tool request and returns no answer, AGSpeak continues
-the same conversation once, asking for an answer from existing context without
-further tools. The denied operation stays blocked; the recording is not resent.
-
-## How it works
-
-The agent runs from a dedicated `~/.cache/agyspeak/workspace/` directory, rather
-than the repository or the directory where you launched AGSpeak. This keeps the
-project out of its immediate workspace; existing file-access permissions still
-apply.
-
-Each turn runs `agy --print --output-format stream-json`, with `--conversation <id>`
-after the first turn so context carries over. AGSpeak passes `--sandbox` to isolate
-shell commands. Command approval still follows your existing Antigravity policy;
-AGSpeak does not grant automatic command approval or change global settings.
-
-Each audio turn includes the absolute
-recording path and asks Gemini to open it with its native file-viewing tool. That
-tool returns the WAV as native audio, so Gemini can hear pronunciation and prosody.
-
-On the first turn of a new conversation a short preamble is prepended telling the
-model it is a general multimodal assistant, how to open native audio, and that
-language learning is a common use. Override it with `--system "..."` or drop it
-with `--no-system`. Resumed conversations already carry it in their history.
-
-Things learned the hard way:
-
-- `agy --print` sends `@/path.wav` references as plain text. Its native file-viewing
-  tool (`view_file`, named `read_file` in some toolsets) returns audio to the model.
-  Every audio turn explicitly requests that tool, including in resumed sessions.
-  No shell permission bypass or external transcription service is needed.
-- The model knows your macOS username regardless of where recordings live: agy's
-  own system prompt includes its home, scratch, and MCP directories. Hiding it
-  would mean faking `$HOME`, which would break agy's auth and config.
-- The `google-antigravity` Python SDK talks to the Gemini API directly and needs
-  `GEMINI_API_KEY`, so it does not use the subscription. That is why this shells
-  out to `agy` instead.
 
 ## Letting Gemini talk back (optional)
 
@@ -148,53 +97,14 @@ For headless `agy`, allow the tools in
 }
 ```
 
-Kokoro/Qwen playback and replay use the running `agyspeak` process. macOS `say`
-can run directly. `agy mcp add` is global and makes the tools visible to every
+`agy mcp add` is global and makes the tools visible to every
 `agy` session.
-
-## Vendored Swedish Kokoro
-
-The Swedish Kokoro runtime is in [`vendor/kokoro-sv`](vendor/kokoro-sv).
-uv installs it as an editable workspace dependency, so Python edits there take
-effect directly. The copy includes our pronunciation phrasing patch; model
-weights and lexicons stay in Hugging Face's download cache.
-
-See [`VENDORED.md`](vendor/kokoro-sv/VENDORED.md) for the upstream revision,
-license, local changes, and focused checks. The harness routes Swedish speech
-to this vendored engine.
 
 # More screenshots
 <img width="721" height="578" alt="зображення" src="https://github.com/user-attachments/assets/39727adc-fd08-4ce5-886c-12235d701c45" />
 <img width="720" height="749" alt="зображення" src="https://github.com/user-attachments/assets/b3135dc7-b33d-4b77-984d-05a763394536" />
 
 
-
 # Notes
 It's a funny experiment made with Fable and Sol. If something isn't right, tell
 your chatbot to figure it out.
-
-### Scoped speech in replies
-
-Use the same options as the `speak` tool inside a scoped block:
-
-```xml
-English explanation. <speak language="sv" voice="Lars" speed="0.9">
-Ringarnas härskare
-
-Text to read in Swedish.
-</speak> Back to English.
-```
-
-The terminal hides the tags and renders their contents as normal Markdown;
-code examples remain literal. Attributes are `voice`, `language`, `speed`
-(0.5–1.5), `engine`, and `instruct` (Qwen only). Nested scopes inherit options
-and restore the enclosing options when closed. Swedish voice names select
-`kokoro-sv` automatically; Swedish without a named voice uses Klara.
-`<swedish>…</swedish>` remains supported. Use `engine="say" voice="Alva"`
-for macOS speech.
-
-Explicit `<speak>` blocks preserve line breaks for the vendored Swedish phrasing
-patch. They stay together until the model context requires splitting, without
-inserting extra silence. Swedish synthesis uses MPS on Apple Silicon, CUDA when
-available elsewhere, and CPU otherwise. Restart the harness and use `/new` to
-load the updated Gemini prompt.

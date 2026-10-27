@@ -1,0 +1,14 @@
+minimumReleaseAgeExclude:
+  - '@expo/cli@58.1.16'
+  - '@expo/fingerprint@0.21.7'
+  - '@expo/metro-config@58.0.18'
+  - '@expo/router-server@58.0.18'
+  - babel-preset-expo@58.0.21
+  - expo-file-system@58.0.12
+  - expo-modules-cli@0.3.3
+  - expo-modules-core@58.0.27
+  - expo-modules-jsi@58.0.20
+  - expo@58.0.20
+  - expo-dev-client@58.0.16
+  - expo-dev-launcher@58.0.16
+  - expo-dev-menu@58.0.12
