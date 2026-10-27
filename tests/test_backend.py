@@ -51,9 +51,14 @@ def test_turn_log_preserves_raw_events_and_diagnostics(monkeypatch, tmp_path: Pa
         }}),
     ]) + '\n'
     monkeypatch.setattr(backend, 'TURN_LOG_DIR', tmp_path / 'turns')
-    monkeypatch.setattr(backend.subprocess, 'Popen', lambda *args, **kwargs: SimpleNamespace(
-        stdout=io.StringIO(raw), wait=lambda: 0,
-    ))
+    workspace = tmp_path / 'workspace'
+    monkeypatch.setattr(backend, 'AGY_WORKSPACE', workspace)
+    original_cwd = Path.cwd()
+    def spawn(*args, **kwargs):
+        assert kwargs['cwd'] == workspace
+        assert workspace.is_dir()
+        return SimpleNamespace(stdout=io.StringIO(raw), wait=lambda: 0)
+    monkeypatch.setattr(backend.subprocess, 'Popen', spawn)
     events = []
     def on_event(event):
         events.append(event)
@@ -69,6 +74,7 @@ def test_turn_log_preserves_raw_events_and_diagnostics(monkeypatch, tmp_path: Pa
     assert first.response == 'Hej!'
     assert first.notes == ['diagnostic message']
     assert len(events) == 3
+    assert Path.cwd() == original_cwd
 
 
 def test_empty_denied_turn_continues_once_in_same_conversation(monkeypatch) -> None:

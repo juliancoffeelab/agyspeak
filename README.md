@@ -83,6 +83,11 @@ further tools. The denied operation stays blocked; the recording is not resent.
 
 ## How it works
 
+The agent runs from a dedicated `~/.cache/agyspeak/workspace/` directory, rather
+than the repository or the directory where you launched AGSpeak. This keeps the
+project out of its immediate workspace; existing file-access permissions still
+apply.
+
 Each turn runs `agy --print --output-format stream-json`, with `--conversation <id>`
 after the first turn so context carries over. AGSpeak passes `--sandbox` to isolate
 shell commands. Command approval still follows your existing Antigravity policy;

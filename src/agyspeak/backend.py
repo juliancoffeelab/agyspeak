@@ -13,6 +13,7 @@ from datetime import datetime
 from pathlib import Path
 
 TURN_LOG_DIR = Path.home() / ".cache" / "agyspeak" / "turns"
+AGY_WORKSPACE = Path.home() / ".cache" / "agyspeak" / "workspace"
 
 DEFAULT_MODEL = "gemini-3.8-flash-medium"
 DEFAULT_VOICE_PROMPT = "Listen to this voice message and respond to it."
@@ -202,6 +203,7 @@ class AgyClient:
         if self.preamble and not self.conversation_id:
             prompt = f"{self.preamble}\n\n{prompt}"
         TURN_LOG_DIR.mkdir(parents=True, exist_ok=True)
+        AGY_WORKSPACE.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(
             mode="w", encoding="utf-8", buffering=1,
             prefix=datetime.now().strftime("%Y%m%d-%H%M%S-"), suffix=".log",
@@ -213,6 +215,7 @@ class AgyClient:
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
+                cwd=AGY_WORKSPACE,
             )
             turn = Turn(log_path=Path(raw_log.name))
             started = time.monotonic()
