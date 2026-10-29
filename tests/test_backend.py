@@ -158,3 +158,23 @@ def test_audio_part_failure_stops_remaining_parts(monkeypatch, tmp_path: Path):
     result = client.send('Listen.', original)
     assert len(calls) == 1
     assert 'Stopped at audio part 1/2' in result.notes[-1]
+
+
+def test_timeout_kills_cli_that_ignores_termination(monkeypatch, tmp_path):
+    import pytest
+    from agyspeak import backend
+
+    script = tmp_path / 'fake-agy'
+    script.write_text(
+        '#!/usr/bin/env python3\n'
+        'import signal, time\n'
+        'signal.signal(signal.SIGTERM, signal.SIG_IGN)\n'
+        'print(\'{"event":"init","conversation_id":"test"}\', flush=True)\n'
+        'time.sleep(5)\n'
+    )
+    script.chmod(0o755)
+    monkeypatch.setattr(backend, 'TURN_LOG_DIR', tmp_path / 'turns')
+    monkeypatch.setattr(backend, 'AGY_WORKSPACE', tmp_path / 'workspace')
+    client = AgyClient(binary=str(script), turn_timeout=0.3)
+    with pytest.raises(TimeoutError):
+        client.send('hello')

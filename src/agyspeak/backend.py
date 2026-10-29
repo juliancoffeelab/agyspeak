@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
+import signal
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -82,6 +85,7 @@ class AgyClient:
     conversation_id: str | None = None
     binary: str = "agy"
     preamble: str | None = DEFAULT_PREAMBLE
+    turn_timeout: float | None = None
 
     def __post_init__(self) -> None:
         if shutil.which(self.binary) is None:
@@ -216,32 +220,67 @@ class AgyClient:
                 text=True,
                 bufsize=1,
                 cwd=AGY_WORKSPACE,
+                start_new_session=True,
             )
             turn = Turn(log_path=Path(raw_log.name))
             started = time.monotonic()
+            finished = threading.Event()
+            timed_out = threading.Event()
+
+            def watch() -> None:
+                while not finished.wait(0.1):
+                    expired = self.turn_timeout and time.monotonic() - started > self.turn_timeout
+                    if not expired:
+                        continue
+                    if expired:
+                        timed_out.set()
+                    try:
+                        os.killpg(proc.pid, signal.SIGTERM)
+                        if not finished.wait(2):
+                            os.killpg(proc.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    return
+
+            if self.turn_timeout is not None:
+                threading.Thread(target=watch, daemon=True).start()
             assert proc.stdout is not None
-            for line in proc.stdout:
-                raw_log.write(line)
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    turn.notes.append(line)
-                    continue
-                if on_event:
-                    on_event(event)
-                if event.get("event") == "result":
-                    result = event.get("result", {})
-                    turn.response = result.get("response", "")
-                    turn.conversation_id = result.get("conversation_id")
-                    turn.status = result.get("status", "")
-                    turn.usage = result.get("usage", {})
-                    turn.denied_actions = result.get("denied_actions", [])
-                elif event.get("event") == "init":
-                    turn.conversation_id = event.get("conversation_id") or turn.conversation_id
-            code = proc.wait()
+            try:
+                for line in proc.stdout:
+                    raw_log.write(line)
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        turn.notes.append(line)
+                        continue
+                    if on_event:
+                        on_event(event)
+                    if event.get("event") == "result":
+                        result = event.get("result", {})
+                        turn.response = result.get("response", "")
+                        turn.conversation_id = result.get("conversation_id")
+                        turn.status = result.get("status", "")
+                        turn.usage = result.get("usage", {})
+                        turn.denied_actions = result.get("denied_actions", [])
+                    elif event.get("event") == "init":
+                        turn.conversation_id = event.get("conversation_id") or turn.conversation_id
+                code = proc.wait()
+            finally:
+                finished.set()
+                if self.turn_timeout is not None and proc.poll() is None:
+                    try:
+                        os.killpg(proc.pid, signal.SIGTERM)
+                        proc.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(proc.pid, signal.SIGKILL)
+                        proc.wait()
+                    except ProcessLookupError:
+                        pass
+            if timed_out.is_set():
+                raise TimeoutError("Antigravity did not finish within the turn time limit")
         # agy's own duration_seconds is cumulative for the conversation, so time it here.
         turn.duration = time.monotonic() - started
         if code != 0 and not turn.response:
