@@ -5,7 +5,6 @@ export default function App() {
   return (
     <View style={styles.container}>
       <Text style={styles.title}>AGSpeak</Text>
-      <Text style={styles.subtitle}>Android companion</Text>
       <StatusBar style="auto" />
     </View>
   );
@@ -21,10 +20,5 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 32,
     fontWeight: '600',
-  },
-  subtitle: {
-    marginTop: 8,
-    fontSize: 16,
-    color: '#555',
   },
 });

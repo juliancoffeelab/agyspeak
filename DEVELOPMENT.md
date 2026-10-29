@@ -99,6 +99,21 @@ inserting extra silence. Swedish synthesis uses MPS on Apple Silicon, CUDA when
 available elsewhere, and CPU otherwise. Restart the harness and use `/new` to
 load the updated Gemini prompt.
 
-## Android companion
+## Android foundation
 
-The Expo/React Native scaffold is in [`reactnative/`](reactnative/README.md).
+The independent Expo/React Native app lives in `reactnative/`. Its current screen
+is a minimal placeholder. It has no connection to the Python application or a
+model provider. The native audio, file-storage, and secure-storage dependencies
+are available for subsequent UI work.
+
+From `reactnative/`, run `pnpm install` and `pnpm typecheck`. `pnpm android` builds
+and launches the development app; `pnpm android:release --no-bundler` builds and
+launches the standalone release. The wrapper uses the standard macOS Android SDK
+location and Android Studio's bundled JDK unless overridden in the environment.
+After native configuration changes, run `pnpm prebuild` before building again.
+
+`pnpm build:release` creates `artifacts/agyspeak-release.apk`. Its first run
+generates a persistent local signing key under `.signing/`; keep a private backup
+because updates require the same key. Signing files and build artifacts are
+ignored by Git. Development uses package `dev.agyspeak.app.dev`; release uses
+`dev.agyspeak.app`, so both builds can coexist.

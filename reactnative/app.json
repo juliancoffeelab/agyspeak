@@ -2,12 +2,16 @@
   "expo": {
     "name": "AGSpeak",
     "slug": "agyspeak",
+    "scheme": "agyspeak",
     "version": "0.1.0",
-    "platforms": ["android"],
+    "platforms": [
+      "android"
+    ],
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "android": {
-      "package": "dev.agyspeak.companion",
+      "package": "dev.agyspeak.app",
+      "allowBackup": false,
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -15,6 +19,11 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false
-    }
+    },
+    "plugins": [
+      ["expo-audio", { "microphonePermission": "Record voice messages.", "enableBackgroundPlayback": true }],
+      "expo-secure-store",
+      "./plugins/withReleaseSigning"
+    ]
   }
 }

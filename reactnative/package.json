@@ -5,10 +5,17 @@
   "main": "index.ts",
   "dependencies": {
     "expo": "~58.0.20",
+    "expo-audio": "~58.0.10",
+    "expo-clipboard": "~58.0.4",
+    "expo-crypto": "~58.0.7",
     "expo-dev-client": "~58.0.16",
+    "expo-file-system": "~58.0.12",
+    "expo-keep-awake": "~58.0.3",
+    "expo-secure-store": "~58.0.2",
     "expo-status-bar": "~58.0.4",
     "react": "19.3.0",
-    "react-native": "0.88.0"
+    "react-native": "0.88.0",
+    "react-native-safe-area-context": "~5.10.1"
   },
   "devDependencies": {
     "@types/react": "~19.3.0",
@@ -16,8 +23,10 @@
   },
   "scripts": {
     "start": "expo start",
-    "android": "sh scripts/android.sh run:android",
+    "android": "sh scripts/android.sh run:android --app-id dev.agyspeak.app.dev",
+    "android:release": "sh scripts/android.sh run:android --variant release --app-id dev.agyspeak.app",
     "build:apk": "sh scripts/android.sh build-apk",
+    "build:release": "sh scripts/android.sh build-release",
     "prebuild": "sh scripts/android.sh prebuild --platform android",
     "typecheck": "tsc --noEmit"
   },
