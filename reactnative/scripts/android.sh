@@ -8,6 +8,21 @@ if [ -z "${JAVA_HOME:-}" ] && [ -d "/Applications/Android Studio.app/Contents/jb
 fi
 export PATH="${JAVA_HOME:+$JAVA_HOME/bin:}$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
 
+usb_serial=
+if [ "${1:-}" = "install-release" ]; then
+  if ! usb_serial=$(adb -d get-serialno) || [ "$usb_serial" = "unknown" ]; then
+    printf 'Connect exactly one USB phone and authorize USB debugging.\n' >&2
+    exit 1
+  fi
+  if [ "$(adb -s "$usb_serial" get-state 2>/dev/null || true)" != "device" ]; then
+    printf 'Unlock the phone and authorize USB debugging, then retry.\n' >&2
+    exit 1
+  fi
+  printf 'Building release for USB device %s\n' "$usb_serial"
+  shift
+  set -- build-release "$@"
+fi
+
 if [ "${1:-}" = "build-apk" ] || [ "${1:-}" = "build-release" ]; then
   variant=Debug
   if [ "$1" = "build-release" ]; then
@@ -24,6 +39,11 @@ if [ "${1:-}" = "build-apk" ] || [ "${1:-}" = "build-release" ]; then
   mkdir -p artifacts
   cp "android/app/build/outputs/apk/$kind/app-$kind.apk" "artifacts/agyspeak-$kind.apk"
   printf '\nAPK: %s/artifacts/agyspeak-%s.apk\n' "$PWD" "$kind"
+  if [ -n "$usb_serial" ]; then
+    app_id=$(node -p "require('./app.json').expo.android.package")
+    adb -s "$usb_serial" install -r "artifacts/agyspeak-$kind.apk"
+    adb -s "$usb_serial" shell am start -n "$app_id/.MainActivity"
+  fi
   exit 0
 fi
 

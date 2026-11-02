@@ -106,11 +106,38 @@ is a minimal placeholder. It has no connection to the Python application or a
 model provider. The native audio, file-storage, and secure-storage dependencies
 are available for subsequent UI work.
 
-From `reactnative/`, run `pnpm install` and `pnpm typecheck`. `pnpm android` builds
+From `reactnative/`, run `pnpm install` and `pnpm check`. `pnpm android` builds
 and launches the development app; `pnpm android:release --no-bundler` builds and
 launches the standalone release. The wrapper uses the standard macOS Android SDK
 location and Android Studio's bundled JDK unless overridden in the environment.
 After native configuration changes, run `pnpm prebuild` before building again.
+
+From the repository root, `make android` builds, installs, and opens the release
+on the single authorized USB-connected phone, without a device picker or Metro.
+The equivalent command inside `reactnative/` is `pnpm android:usb`. The command
+checks the phone before building and pins installation to that device's serial;
+no phone, an unauthorized phone, or multiple USB devices produces an error.
+
+`make check` runs the Android app's ESLint and TypeScript checks; `make lint` runs
+ESLint alone. Both lint errors and warnings fail the check, and `make android`
+runs the checks before building or installing. Inside `reactnative/`, use
+`pnpm lint:fix` for automatic fixes.
+
+The ESLint 10 flat config uses `@eslint-react/eslint-plugin`, React's official
+hooks plugin (including Compiler diagnostics), `eslint-plugin-import-x`, and
+type-aware TypeScript checks for unhandled/misused promises, unsafe types, and
+deprecated APIs. Import resolution includes Android/native file extensions.
+Standalone Expo rules check environment access and DOM exports; the official
+React Native plugin checks platform colors and deprecated deep imports. React
+DOM and server-component rules are disabled for this native app. Compiler
+diagnostics do not enable the compiler's build-time optimizations.
+
+The old Expo preset and `eslint-plugin-react-native` are removed. Its unused-style
+and single-element style-array checks are no longer available. A built-in syntax
+guard catches literal text under common native containers; it does not cover
+aliased containers or expression children. Generated native projects, artifacts,
+and local secrets are excluded. These are offline source checks; native
+dependency/build-tool deprecation warnings require separate maintenance.
 
 `pnpm build:release` creates `artifacts/agyspeak-release.apk`. Its first run
 generates a persistent local signing key under `.signing/`; keep a private backup

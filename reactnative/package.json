@@ -18,16 +18,30 @@
     "react-native-safe-area-context": "~5.10.1"
   },
   "devDependencies": {
+    "@eslint-react/eslint-plugin": "^5.28.8",
+    "@eslint/js": "^10.0.1",
+    "@react-native/eslint-plugin": "^0.88.1",
     "@types/react": "~19.3.0",
-    "typescript": "~6.0.3"
+    "eslint": "^10.14.0",
+    "eslint-import-resolver-typescript": "^4.4.5",
+    "eslint-plugin-expo": "^1.2.1",
+    "eslint-plugin-import-x": "^4.17.1",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.14.0",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.72.1"
   },
   "scripts": {
     "start": "expo start",
     "android": "sh scripts/android.sh run:android --app-id dev.agyspeak.app.dev",
     "android:release": "sh scripts/android.sh run:android --variant release --app-id dev.agyspeak.app",
+    "android:usb": "sh scripts/android.sh install-release",
     "build:apk": "sh scripts/android.sh build-apk",
     "build:release": "sh scripts/android.sh build-release",
     "prebuild": "sh scripts/android.sh prebuild --platform android",
+    "lint": "eslint . --max-warnings 0",
+    "lint:fix": "eslint . --fix --max-warnings 0",
+    "check": "pnpm lint && pnpm typecheck",
     "typecheck": "tsc --noEmit"
   },
   "private": true
