@@ -21,8 +21,21 @@
       "predictiveBackGestureEnabled": false
     },
     "plugins": [
-      ["expo-audio", { "microphonePermission": "Record voice messages.", "enableBackgroundPlayback": true }],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Record voice messages.",
+          "enableBackgroundPlayback": true
+        }
+      ],
       "expo-secure-store",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Scan an OpenRouter key QR code.",
+          "recordAudioAndroid": false
+        }
+      ],
       "./plugins/withReleaseSigning"
     ]
   }

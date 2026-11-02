@@ -16,9 +16,10 @@ type HistoryScreenProps = {
   onClose: () => void;
   onOpen: (id: string | null) => void;
   onDelete: (chat: SavedChat) => void;
+  onSettings: () => void;
 };
 
-export function HistoryScreen({ visible, colors, chats, activeId, busy, error, onClose, onOpen, onDelete }: HistoryScreenProps) {
+export function HistoryScreen({ visible, colors, chats, activeId, busy, error, onClose, onOpen, onDelete, onSettings }: HistoryScreenProps) {
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
       <SafeAreaProvider>
@@ -69,6 +70,9 @@ export function HistoryScreen({ visible, colors, chats, activeId, busy, error, o
               </View>
             )}
           />
+          <Pressable accessibilityRole="button" accessibilityLabel="Open settings" onPress={onSettings} style={styles.settings}>
+            <Text style={[styles.deleteText, { color: colors.text }]}>Settings</Text>
+          </Pressable>
         </SafeAreaView>
       </SafeAreaProvider>
     </Modal>
@@ -77,6 +81,7 @@ export function HistoryScreen({ visible, colors, chats, activeId, busy, error, o
 
 const styles = StyleSheet.create({
   ...screenStyles,
+  settings: { minHeight: 56, justifyContent: 'center', paddingHorizontal: 20 },
   historyList: { flexGrow: 1 },
   historyEmpty: { paddingHorizontal: 20 },
   historyRow: { flexDirection: 'row', alignItems: 'center', borderBottomWidth: StyleSheet.hairlineWidth },

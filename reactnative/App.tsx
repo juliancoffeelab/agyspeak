@@ -8,18 +8,22 @@ import { useChatHistory } from './src/chat/useChatHistory';
 import { ChatScreen } from './src/chat/ChatScreen';
 import { HistoryScreen } from './src/chat/HistoryScreen';
 import { palettes } from './src/chat/theme';
+import { useModelSettings } from './src/chat/useModelSettings';
+import { SettingsScreen } from './src/chat/SettingsScreen';
 
 export default function App() {
   const dark = useColorScheme() === 'dark';
   const colors = palettes[dark ? 'dark' : 'light'];
-  const { history, busy, error, retry, send, select, remove } = useChatHistory();
+  const { history, busy, pending, error, retry, send, retryReply, stop, select, remove } = useChatHistory();
+  const model = useModelSettings();
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [draft, setDraft] = useState('');
 
   async function sendMessage() {
     const pending = draft;
     const text = pending.trim();
-    if (text && await send(text)) {
+    if (text && await send(text, model.settings)) {
       setDraft(current => current === pending ? '' : current);
     }
   }
@@ -45,7 +49,12 @@ export default function App() {
         colors={colors}
         history={history}
         busy={busy}
-        error={error}
+        error={error ?? model.error}
+        pending={pending}
+        connected={model.ready && Boolean(model.settings.apiKey)}
+        onStop={() => { void stop(); }}
+        onRetryReply={id => { void retryReply(id, model.settings); }}
+        onOpenSettings={() => setSettingsOpen(true)}
         draft={draft}
         onDraftChange={setDraft}
         onSend={sendMessage}
@@ -63,7 +72,9 @@ export default function App() {
         onClose={() => setHistoryOpen(false)}
         onOpen={id => { void openChat(id); }}
         onDelete={deleteChat}
+        onSettings={() => { setHistoryOpen(false); setSettingsOpen(true); }}
       />
+      {settingsOpen && <SettingsScreen colors={colors} initial={model.settings} onSave={model.save} onClose={() => setSettingsOpen(false)} />}
     </SafeAreaProvider>
   );
 }

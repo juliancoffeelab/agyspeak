@@ -10,12 +10,18 @@ import type { ChatHistory } from './history';
 import { ChatHeader } from './ChatHeader';
 import type { ChatColors } from './theme';
 import { screenStyles } from './screenStyles';
+import type { PendingReply } from './ChatController';
 
 type ChatScreenProps = {
   colors: ChatColors;
   history: ChatHistory | null;
   busy: boolean;
   error: string | null;
+  pending: PendingReply | null;
+  connected: boolean;
+  onStop: () => void;
+  onRetryReply: (id: number) => void;
+  onOpenSettings: () => void;
   draft: string;
   onDraftChange: (text: string) => void;
   onSend: () => Promise<void>;
@@ -24,9 +30,9 @@ type ChatScreenProps = {
   onRetry: () => void;
 };
 
-export function ChatScreen({ colors, history, busy, error, draft, onDraftChange, onSend, onNewChat, onOpenHistory, onRetry }: ChatScreenProps) {
+export function ChatScreen({ colors, history, busy, error, pending, connected, onStop, onRetryReply, onOpenSettings, draft, onDraftChange, onSend, onNewChat, onOpenHistory, onRetry }: ChatScreenProps) {
   const [scrollRequest, setScrollRequest] = useState(0);
-  const canSend = history !== null && !busy && draft.trim().length > 0;
+  const canSend = history !== null && connected && !pending && !busy && draft.trim().length > 0;
 
   async function sendMessage() {
     await onSend();
@@ -53,7 +59,11 @@ export function ChatScreen({ colors, history, busy, error, draft, onDraftChange,
             )}
           </View>
         )}
-        <MessageList key={history?.activeId ?? 'new'} colors={colors} history={history} scrollRequest={scrollRequest} />
+        <MessageList key={history?.activeId ?? 'new'} colors={colors} history={history} scrollRequest={scrollRequest} onRetryReply={onRetryReply} busy={busy || pending !== null} />
+        {!connected && <Pressable accessibilityRole="button" onPress={onOpenSettings} style={styles.retry}>
+          <Text style={[styles.actionText, { color: colors.text }]}>Connect OpenRouter</Text>
+        </Pressable>}
+        {pending !== null && pending.chatId !== history?.activeId && <Text style={[styles.error, { color: colors.muted }]}>Replying in another chat. You can stop it here.</Text>}
         <View style={[styles.composer, { borderTopColor: colors.line }]}>
           <View style={[styles.inputFrame, { borderColor: colors.line }]}>
             <TextInput
@@ -64,18 +74,19 @@ export function ChatScreen({ colors, history, busy, error, draft, onDraftChange,
               value={draft}
               onChangeText={onDraftChange}
               multiline
+              maxLength={12000}
               textAlignVertical="top"
               style={[styles.input, { color: colors.text }]}
             />
           </View>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Send message"
-            disabled={!canSend}
-            onPress={() => { void sendMessage(); }}
-            style={({ pressed }) => [styles.send, { backgroundColor: colors.button, opacity: !canSend ? 0.35 : pressed ? 0.7 : 1 }]}
+            accessibilityLabel={pending ? 'Stop reply' : 'Send message'}
+            disabled={pending ? busy : !canSend}
+            onPress={() => { if (pending) onStop(); else void sendMessage(); }}
+            style={({ pressed }) => [styles.send, { backgroundColor: colors.button, opacity: !(pending ? !busy : canSend) ? 0.35 : pressed ? 0.7 : 1 }]}
           >
-            <Text style={[styles.sendText, { color: colors.buttonText }]}>Send</Text>
+            <Text style={[styles.sendText, { color: colors.buttonText }]}>{pending ? 'Stop' : 'Send'}</Text>
           </Pressable>
         </View>
       </SafeAreaView>
@@ -83,7 +94,7 @@ export function ChatScreen({ colors, history, busy, error, draft, onDraftChange,
   );
 }
 
-function MessageList({ colors, history, scrollRequest }: Pick<ChatScreenProps, 'colors' | 'history'> & { scrollRequest: number }) {
+function MessageList({ colors, history, scrollRequest, onRetryReply, busy }: Pick<ChatScreenProps, 'colors' | 'history' | 'onRetryReply' | 'busy'> & { scrollRequest: number }) {
   const listRef = useRef<LegendListRef>(null);
   const handledSendRef = useRef(scrollRequest);
 
@@ -113,7 +124,7 @@ function MessageList({ colors, history, scrollRequest }: Pick<ChatScreenProps, '
         <View style={styles.empty}>
           <Text style={[styles.emptyTitle, { color: colors.text }]}>{history === null ? 'Opening your chats…' : 'What’s on your mind?'}</Text>
           <Text style={[styles.emptyHint, { color: colors.muted }]}>
-            {history === null ? 'Your conversations stay on this phone.' : 'Try a message. Replies are mocked for now.'}
+            {history === null ? 'Your conversations stay on this phone.' : 'Send a message to start a conversation.'}
           </Text>
         </View>
       }
@@ -121,7 +132,17 @@ function MessageList({ colors, history, scrollRequest }: Pick<ChatScreenProps, '
         <View style={[styles.message, item.role === 'user' && styles.userMessage]}>
           <Text style={[styles.author, { color: colors.muted }]}>{item.role === 'user' ? 'You' : 'AGSpeak'}</Text>
           <View style={item.role === 'user' && [styles.bubble, { backgroundColor: colors.bubble }]}>
-            <Text selectable style={[styles.messageText, { color: colors.text }]}>{item.text}</Text>
+            <Text selectable style={[styles.messageText, { color: colors.text }]}>
+              {item.status === 'pending' ? 'Thinking…' : item.text || (item.status === 'cancelled' ? 'Reply stopped.' : 'Reply failed.')}
+            </Text>
+            {(item.status === 'failed' || item.status === 'cancelled') && (
+              <View>
+                {item.error !== null && <Text style={[styles.replyError, { color: colors.muted }]}>{item.error}</Text>}
+                {item.id === history?.messages.at(-1)?.id && <Pressable accessibilityRole="button" accessibilityLabel="Retry reply" disabled={busy} onPress={() => onRetryReply(item.id)} style={styles.retryReply}>
+                  <Text style={[styles.actionText, { color: colors.text }]}>Retry</Text>
+                </Pressable>}
+              </View>
+            )}
           </View>
         </View>
       )}
@@ -138,6 +159,8 @@ const styles = StyleSheet.create({
   retry: { minHeight: 48, justifyContent: 'center', paddingHorizontal: 20 },
   actionText: { fontSize: 14, fontWeight: '500' },
   messages: { padding: 20 },
+  replyError: { fontSize: 14, lineHeight: 21, marginTop: 8 },
+  retryReply: { minHeight: 48, justifyContent: 'center' },
   separator: { height: 24 },
   message: { alignSelf: 'flex-start', maxWidth: '92%', gap: 7 },
   userMessage: { alignSelf: 'flex-end', alignItems: 'flex-end' },
