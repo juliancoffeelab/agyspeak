@@ -5,6 +5,7 @@ import pytest
 import typer
 
 from agyspeak import cli
+from agyspeak.sessions import SessionPreferences, write_last_session
 
 
 @pytest.fixture
@@ -47,6 +48,7 @@ def test_save_session_includes_voice_state(tmp_path: Path, monkeypatch: pytest.M
     assert json.loads(last_session.read_text()) == {
         "conversation_id": "conversation-id",
         "model": "model-id",
+        "effort": "medium",
         "voice": "bm_fable",
         "voice_mode": True,
     }
@@ -66,3 +68,22 @@ def test_voice_change_before_first_turn_preserves_last_conversation(
     cli._save_session(client, cli.VoiceMode(voice="am_echo", enabled=False))
 
     assert json.loads(last_session.read_text())["conversation_id"] == "keep-me"
+
+
+def test_legacy_model_suffix_migrates_to_separate_preferences():
+    assert SessionPreferences.from_record({'id': 'old-chat', 'model': 'gemini-3.8-flash-high'}) == (
+        SessionPreferences('old-chat', 'gemini-3.8-flash', 'high')
+    )
+
+
+def test_failed_atomic_save_preserves_previous_record(monkeypatch, tmp_path):
+    from agyspeak import sessions
+    path = tmp_path / 'last.json'
+    path.write_text('{"effort":"high"}')
+    def fail_replace(*args):
+        raise OSError('disk error')
+    monkeypatch.setattr(sessions.os, 'replace', fail_replace)
+    with pytest.raises(OSError, match='disk error'):
+        write_last_session(path, {'effort': 'low'})
+    assert json.loads(path.read_text()) == {'effort': 'high'}
+    assert list(tmp_path.iterdir()) == [path]

@@ -1,4 +1,4 @@
-"""Compare CLI Medium with the saved API eval: .venv/bin/python scripts/evaluate_recordings_cli.py PATH"""
+"""Compare Antigravity ACP Medium with the saved API eval: .venv/bin/python scripts/evaluate_recordings_cli.py PATH"""
 
 import argparse
 import ast
@@ -9,6 +9,7 @@ import shutil
 import tempfile
 
 from agyspeak.backend import AgyClient
+from agyspeak.sessions import DEFAULT_MODEL, DEFAULT_EFFORT
 
 
 def main():
@@ -36,15 +37,15 @@ def main():
                   " Give brief acoustic evidence for the observation; do not invent details. "
                   "If the target word is absent or unintelligible, answer unclear. "
                   "Return only a JSON object with three string fields: transcript, observation, evidence.")
-        result = dict(slug=case["slug"], model="gemini-3.8-flash-medium", route="Antigravity CLI", repeat=repeat)
-        client = AgyClient(preamble=None, turn_timeout=90)
+        result = dict(slug=case["slug"], model=DEFAULT_MODEL, effort=DEFAULT_EFFORT, route="Antigravity ACP", repeat=repeat)
         try:
-            turn = client.send(prompt, audio=audio_paths[case["slug"]])
-            text = turn.response.strip()
-            if text.startswith("```"):
-                text = "\n".join(text.splitlines()[1:-1])
-            result.update(answer=json.loads(text), total_seconds=turn.duration,
-                          status=turn.status, log=str(turn.log_path))
+            with AgyClient(preamble=None, turn_timeout=90) as client:
+                turn = client.send(prompt, audio=audio_paths[case["slug"]])
+                text = turn.response.strip()
+                if text.startswith("```"):
+                    text = "\n".join(text.splitlines()[1:-1])
+                result.update(answer=json.loads(text), total_seconds=turn.duration,
+                              status=turn.status, log=str(turn.log_path))
         except Exception as exc:
             result["error"] = type(exc).__name__
         return result

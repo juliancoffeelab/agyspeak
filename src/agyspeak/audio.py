@@ -1,4 +1,4 @@
-"""Microphone capture to WAV files that `agy` can attach."""
+"""Microphone capture and lossless preparation of audio attachments."""
 
 from __future__ import annotations
 

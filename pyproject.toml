@@ -1,7 +1,7 @@
 [project]
 name = "agyspeak"
 version = "0.1.0"
-description = "Terminal voice chat with Gemini through the Antigravity CLI (agy)"
+description = "Terminal voice chat with Gemini through official Antigravity ACP"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = [

@@ -93,7 +93,8 @@ def main():
                               "Use the native file-viewing tool (view_file or read_file) to open BOTH files "
                               "and listen to their returned native audio. Do not use shell commands or "
                               "external transcription tools. If audio is unavailable, answer unclear.")
-                    turn = AgyClient(preamble=None, turn_timeout=120).send(cli_prompt)
+                    with AgyClient(preamble=None, turn_timeout=120) as client:
+                        turn = client.send(cli_prompt)
                     text = turn.response.strip()
                     result.update(status=turn.status, denied_actions=len(turn.denied_actions), log=str(turn.log_path))
                     if text.startswith("```"):
@@ -108,7 +109,7 @@ def main():
         return results
 
     with ThreadPoolExecutor(max_workers=2) as pool:
-        futures = [pool.submit(run, route) for route in ("Lite API", "Medium CLI")]
+        futures = [pool.submit(run, route) for route in ("Lite API", "Medium ACP")]
         for future in as_completed(futures):
             report["results"].extend(future.result())
             output.write_text(json.dumps(report, indent=2, ensure_ascii=False))

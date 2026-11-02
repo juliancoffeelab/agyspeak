@@ -1,12 +1,10 @@
-"""Interactive terminal chat: type or record, talk to Gemini through `agy`."""
+"""Interactive terminal chat through Google's official Antigravity ACP runtime."""
 
 from __future__ import annotations
 
-import atexit
 import json
 import os
 import select
-import subprocess
 import sys
 import time
 from collections.abc import Callable
@@ -22,11 +20,14 @@ from prompt_toolkit.patch_stdout import patch_stdout
 from rich.console import Console
 from rich.live import Live
 from rich.panel import Panel
+from rich.prompt import Confirm
 from rich.text import Text
 
 from agyspeak import audio as audio_mod
 from agyspeak import player, tts, worker
 from agyspeak.backend import DEFAULT_MODEL, AgyClient, AgyNotFound, Turn
+from agyspeak.events import AudioPart, AuthenticationRequired, ChatEvent, TextDelta, ToolProgress
+from agyspeak.sessions import EFFORT_LEVELS, SessionPreferences, write_last_session
 from agyspeak.speech_text import narration_chunks
 from agyspeak.terminal_math import TerminalMarkdown
 
@@ -46,8 +47,9 @@ HELP = r"""
   Enter             start recording when the prompt is empty
   /last \[note]      re-send the most recent recording
   /repeat           narrate the last model reply again
-  /model \[name]     show or switch the model (see /models)
-  /models           list models available through agy
+  /model \[name]     show model + effort, or switch the model (see /models)
+  /effort \[level]   show or set thinking level: low | medium | high
+  /models           list models available through Antigravity ACP
   /new              start a fresh conversation
   /id               print the current conversation id
   /sessions         list saved sessions (resume with `agyspeak --conversation <id>`)
@@ -171,15 +173,14 @@ def _save_session(
 ) -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     state = _load_session()
-    state["model"] = client.model
-    if client.conversation_id:
-        state["conversation_id"] = client.conversation_id
+    if client.conversation_id or not state.get("conversation_id"):
+        state.update(client.preferences.to_record())
     if voice_mode:
         state["voice"] = voice_mode.voice
         state["voice_mode"] = voice_mode.enabled
     if last_response is not None:
         state["last_response"] = last_response
-    LAST_SESSION.write_text(json.dumps(state))
+    write_last_session(LAST_SESSION, state)
 
 
 def _load_sessions() -> list[dict]:
@@ -206,7 +207,8 @@ def _log_session(client: AgyClient, title: str = "") -> None:
     if not client.conversation_id:
         return
     now = time.strftime("%Y-%m-%d %H:%M")
-    entry = {"id": client.conversation_id, "model": client.model, "updated": now}
+    preferences = client.preferences.to_record()
+    entry = {"id": preferences.pop("conversation_id"), **preferences, "updated": now}
     if title:
         entry["started"] = now
         entry["title"] = title[:60]
@@ -232,7 +234,7 @@ def _resolve_conversation(prefix: str) -> str:
     matches = [e["id"] for e in _load_sessions() if e["id"].startswith(prefix)]
     if len(matches) == 1:
         return matches[0]
-    # agy silently starts a fresh conversation for an unknown id, so refuse.
+    # Only resolve known saved conversations; do not guess at a mistyped prefix.
     if not matches:
         console.print(f"[red]no saved session starts with {prefix!r}[/red]")
     else:
@@ -319,7 +321,7 @@ def _render_turn(turn: Turn, model: str) -> None:
     if turn.denied_actions:
         names = ", ".join(a.get("display_name", a.get("action", "?")) for a in turn.denied_actions)
         console.print(
-            f"[yellow]agy blocked tool use ({names}).[/yellow]"
+            f"[yellow]Antigravity tool use was denied ({names}).[/yellow]"
         )
     body = turn.response.strip()
     if not body:
@@ -334,10 +336,9 @@ def _render_turn(turn: Turn, model: str) -> None:
     )
 
 
-def _tool_description(step: dict) -> str:
-    info = step.get("tool_info") or {}
-    name = step.get("tool_name") or info.get("name") or "tool"
-    params = info.get("parameters") or {}
+def _tool_description(tool: ToolProgress) -> str:
+    name = tool.title
+    params = tool.arguments
     path = params.get("Path")
     if path:
         detail = _display_path(Path(path))
@@ -369,32 +370,64 @@ def _tool_description(step: dict) -> str:
     return f"{name} · {detail}" if detail else name
 
 
+def _agent_notice(event: ChatEvent) -> None:
+    if isinstance(event, AuthenticationRequired):
+        console.print(Text("Sign in to Antigravity in your browser to continue.", style="dim"))
+
+
+def _confirm_force_stop() -> bool:
+    console.print(Text("Antigravity is still shutting down and may be saving chat history.", style="yellow"))
+    try:
+        return Confirm.ask("Force stop? Recent chat history may not be saved", default=False, console=console)
+    except (EOFError, KeyboardInterrupt):
+        return False
+
+
 def _send(client: AgyClient, text: str, clip: Path | None, voice_mode: VoiceMode) -> str:
     label = "voice" if clip else "text"
     is_first = client.conversation_id is None
-    shown_tools: set[tuple] = set()
+    shown_tools: set[str] = set()
     with console.status(f"[bold blue]thinking[/bold blue] [dim]({label})[/dim]") as status:
 
-        def on_event(event: dict) -> None:
-            if event.get("event") == "audio_part":
-                description = f"audio part {event['index']}/{event['total']} · {_display_path(Path(event['path']))}"
+        def on_event(event: ChatEvent) -> None:
+            _agent_notice(event)
+            if isinstance(event, AudioPart):
+                description = f"audio part {event.index}/{event.total} · {_display_path(event.path)}"
                 console.print(Text(f"↳ {description}", style="dim"))
                 status.update(Text(description, style="blue"))
                 return
-            if event.get("event") != "step_update":
-                return
-            step = event.get("step_update", {})
-            if step.get("step_type") == "tool":
-                description = _tool_description(step)
+            elif isinstance(event, ToolProgress):
+                description = _tool_description(event)
                 status.update(Text(f"tool · {description}", style="blue"))
-                key = (step.get("conversation_id"), step.get("step_index"))
+                key = event.call_id
                 if key not in shown_tools:
                     console.print(Text(f"↳ {description}", style="dim"))
                     shown_tools.add(key)
-            elif step.get("step_type") == "agent_response":
+            elif isinstance(event, TextDelta):
                 status.update("[bold blue]responding[/bold blue]")
 
-        turn = client.send(text, clip, on_event=on_event)
+        def permission(call: ToolProgress) -> bool:
+            status.stop()
+            try:
+                console.print(Text(call.title))
+                if call.arguments:
+                    console.print(Text(json.dumps(call.arguments, ensure_ascii=False)))
+                return Confirm.ask("Allow this tool call once?", default=False, console=console)
+            finally:
+                status.start()
+
+        previous_permission = client.on_permission
+        client.on_permission = permission
+        try:
+            turn = client.send(text, clip, on_event=on_event)
+        except (RuntimeError, ValueError, OSError) as exc:
+            console.print(Text(f"Antigravity: {exc}", style="red"))
+            return ""
+        except KeyboardInterrupt:
+            console.print("[dim]turn interrupted[/dim]")
+            return ""
+        finally:
+            client.on_permission = previous_permission
     _render_turn(turn, client.model)
     if speech_error := voice_mode.narrate(turn.response):
         console.print(speech_error)
@@ -414,10 +447,6 @@ def _repeat_last(last_response: str, voice_mode: VoiceMode) -> str:
     return "[dim]replaying last model reply[/dim]"
 
 
-def _run_agy(*args: str) -> None:
-    subprocess.run(["agy", *args], check=False)
-
-
 def _submit_or_record(event) -> None:  # noqa: ANN001
     """Submit typed input, or turn an empty prompt into the audio command."""
     buffer = event.app.current_buffer
@@ -428,23 +457,26 @@ def _submit_or_record(event) -> None:  # noqa: ANN001
 
 @app.command()
 def main(
-    model: str = typer.Option(DEFAULT_MODEL, "--model", "-m", help="agy model id (see `agy models`)"),
-    effort: str | None = typer.Option(None, "--effort", help="low | medium | high"),
+    context: typer.Context,
+    model: str = typer.Option(DEFAULT_MODEL, "--model", "-m", help="Antigravity ACP model id (see /models)"),
+    effort: str | None = typer.Option(None, "--effort", help="ACP thinking level: low | medium | high (default: medium)"),
     resume: bool = typer.Option(False, "--continue", "-c", help="resume the last conversation"),
     conversation: str | None = typer.Option(None, "--conversation", help="resume a conversation by id"),
-    yolo: bool = typer.Option(False, "--yolo", help="pass --dangerously-skip-permissions to agy"),
+    yolo: bool = typer.Option(False, "--yolo", help="use ACP yolo mode and approve tool permission requests"),
     device: int | None = typer.Option(None, "--device", "-d", help="input device index (see /devices)"),
     list_sessions: bool = typer.Option(False, "--list", "-l", help="list saved sessions and exit"),
     system: str | None = typer.Option(None, "--system", help="replace the preamble sent on a new conversation"),
     no_system: bool = typer.Option(False, "--no-system", help="send no preamble at all"),
     voice: str = typer.Option(tts.DEFAULT_KOKORO_VOICE, "--voice", help="Kokoro voice for voice mode"),
 ) -> None:
-    """Voice + text chat with Gemini via the Antigravity CLI."""
+    """Voice + text chat with Gemini via official Antigravity ACP."""
     if list_sessions:
         _print_sessions()
         raise typer.Exit()
+    if effort is not None and effort not in EFFORT_LEVELS:
+        raise typer.BadParameter("choose low, medium, or high", param_hint="--effort")
     try:
-        client = AgyClient(model=model, effort=effort, yolo=yolo)
+        client = AgyClient(model=model, effort=effort, yolo=yolo, on_force_stop=_confirm_force_stop)
         if no_system:
             client.preamble = None
         elif system:
@@ -453,150 +485,165 @@ def main(
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1)
 
-    speech_service = worker.HarnessSpeechService()
-    try:
-        speech_service.start()
-    except Exception as exc:
-        console.print(f"[red]could not start speech service:[/red] {exc}")
-        raise typer.Exit(1)
-    atexit.register(speech_service.close)
-
-    last = _load_session()
-    last_response = str(last.get("last_response") or "")
-    model_given = "--model" in sys.argv or "-m" in sys.argv
-    voice_given = any(arg == "--voice" or arg.startswith("--voice=") for arg in sys.argv[1:])
-    if conversation:
-        client.conversation_id = _resolve_conversation(conversation)
-        entry = next((e for e in _load_sessions() if e["id"] == client.conversation_id), None)
-        if entry and not model_given:
-            client.model = entry["model"]
-    elif resume:
-        if last.get("conversation_id"):
-            client.conversation_id = last["conversation_id"]
-            if not model_given and last.get("model"):
-                client.model = last["model"]
-        else:
-            console.print("[yellow]no previous session to continue[/yellow]")
-
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    saved_voice = str(last.get("voice") or voice)
-    voice_mode = VoiceMode(voice=voice if voice_given else saved_voice)
-    voice_mode.on_change = lambda: _save_session(client, voice_mode)
-    restored_voice_message = ""
-    if last.get("voice_mode"):
-        restored_voice_message = voice_mode.toggle()
-    elif voice_given:
-        _save_session(client, voice_mode)
-    bindings = KeyBindings()
-
-    bindings.add("enter")(_submit_or_record)
-
-    @bindings.add("tab")
-    def _toggle_voice(_event) -> None:  # noqa: ANN001
-        run_in_terminal(lambda: console.print(voice_mode.toggle()))
-
-    @bindings.add("c-x")
-    def _stop_speech(_event) -> None:  # noqa: ANN001
-        run_in_terminal(lambda: console.print(_speech_command("stop", voice_mode.voice)))
-
-    session: PromptSession[str] = PromptSession(
-        history=FileHistory(str(HISTORY)),
-        key_bindings=bindings,
-        prompt_continuation=lambda width, _line, _wrap: " " * width,
-    )
-
-    console.print(
-        Panel(
-            f"model [bold]{client.model}[/bold]"
-            + (f" · resuming [dim]{client.conversation_id}[/dim]" if client.conversation_id else "")
-            + f"\n[dim]Enter to talk · voice {('on' if voice_mode.enabled else 'off')} "
-            f"({voice_mode.voice}) · Tab toggles · /help for commands[/dim]",
-            title="agyspeak",
-            border_style="green",
-        )
-    )
-    if restored_voice_message and not voice_mode.enabled:
-        console.print(restored_voice_message)
-
-    last_clip: Path | None = None
-    while True:
+    with client:
+        speech_service = worker.HarnessSpeechService()
         try:
-            # Keep diagnostics from background model loading above the active
-            # prompt instead of letting them overwrite terminal UI state.
-            with patch_stdout(raw=True):
-                line = session.prompt("› ").strip()
-        except (EOFError, KeyboardInterrupt):
-            console.print("[dim]bye[/dim]")
-            break
-        if not line:
-            continue
+            speech_service.start()
+        except Exception as exc:
+            console.print(f"[red]could not start speech service:[/red] {exc}")
+            raise typer.Exit(1)
 
-        cmd, _, rest = line.partition(" ")
-        rest = rest.strip()
-        match cmd:
-            case "/quit" | "/q" | "/exit":
-                break
-            case "/help" | "/?":
-                console.print(HELP.strip())
-            case "/a" | "/rec" | "/r":
-                clip = _record(device)
-                if clip is None:
-                    continue
-                last_clip = clip
-                note = rest
-                if not note and cmd != "/a":
-                    try:
-                        note = session.prompt("🎤 note (Enter to send as is) › ").strip()
-                    except (EOFError, KeyboardInterrupt):
-                        console.print("[dim]not sent[/dim]")
-                        continue
-                last_response = _send(client, note, clip, voice_mode)
-            case "/last":
-                if last_clip is None:
-                    latest = audio_mod.RECORDINGS_DIR / "latest.wav"
-                    last_clip = latest.resolve() if latest.exists() else None
-                if last_clip is None:
-                    console.print("[yellow]no recording yet[/yellow]")
-                    continue
-                last_response = _send(client, rest, last_clip, voice_mode)
-            case "/repeat":
-                console.print(_repeat_last(last_response, voice_mode))
-            case "/model":
-                if rest:
-                    client.model = rest
-                console.print(f"model: [bold]{client.model}[/bold]")
-            case "/models":
-                _run_agy("models")
-            case "/new":
-                client.reset()
-                last_response = ""
-                _save_session(client, voice_mode, last_response)
-                console.print("[dim]new conversation[/dim]")
-            case "/id":
-                console.print(client.conversation_id or "[dim]none yet[/dim]")
-            case "/sessions":
-                _print_sessions()
-            case "/devices":
-                for idx, name in audio_mod.list_input_devices():
-                    marker = "*" if idx == device else " "
-                    console.print(f" {marker} {idx}: {name}")
-            case "/voice":
-                if rest:
-                    console.print(voice_mode.select(rest))
+        try:
+            last = _load_session()
+            last_response = str(last.get("last_response") or "")
+            model_given = context.get_parameter_source("model").name == "COMMANDLINE"
+            voice_given = context.get_parameter_source("voice").name == "COMMANDLINE"
+            saved = None
+            if conversation:
+                conversation_id = _resolve_conversation(conversation)
+                saved = next(e for e in _load_sessions() if e["id"] == conversation_id)
+            elif resume:
+                if last.get("conversation_id"):
+                    saved = last
                 else:
-                    state = "on" if voice_mode.enabled else "off"
-                    console.print(f"voice: [bold]{voice_mode.voice}[/bold] · mode {state}")
-            case "/voices":
-                console.print("  ".join(tts.kokoro_voices()))
-            case "/speech":
-                console.print(_speech_command(rest, voice_mode.voice))
-            case _ if cmd.startswith("/"):
-                console.print(f"[yellow]unknown command {cmd}[/yellow] (try /help)")
-            case _:
-                last_response = _send(client, line, None, voice_mode)
+                    console.print("[yellow]no previous session to continue[/yellow]")
+            if saved:
+                client.resume(SessionPreferences.from_record(saved), model=model if model_given else None, effort=effort)
 
-    speech_service.close()
-    atexit.unregister(speech_service.close)
+            STATE_DIR.mkdir(parents=True, exist_ok=True)
+            saved_voice = str(last.get("voice") or voice)
+            voice_mode = VoiceMode(voice=voice if voice_given else saved_voice)
+            voice_mode.on_change = lambda: _save_session(client, voice_mode)
+            restored_voice_message = ""
+            if last.get("voice_mode"):
+                restored_voice_message = voice_mode.toggle()
+            elif voice_given:
+                _save_session(client, voice_mode)
+            bindings = KeyBindings()
+
+            bindings.add("enter")(_submit_or_record)
+
+            @bindings.add("tab")
+            def _toggle_voice(_event) -> None:  # noqa: ANN001
+                run_in_terminal(lambda: console.print(voice_mode.toggle()))
+
+            @bindings.add("c-x")
+            def _stop_speech(_event) -> None:  # noqa: ANN001
+                run_in_terminal(lambda: console.print(_speech_command("stop", voice_mode.voice)))
+
+            session: PromptSession[str] = PromptSession(
+                history=FileHistory(str(HISTORY)),
+                key_bindings=bindings,
+                prompt_continuation=lambda width, _line, _wrap: " " * width,
+            )
+
+            console.print(
+                Panel(
+                    f"model [bold]{client.model}[/bold]"
+                    + (f" · resuming [dim]{client.conversation_id}[/dim]" if client.conversation_id else "")
+                    + f"\n[dim]Enter to talk · voice {('on' if voice_mode.enabled else 'off')} "
+                    f"({voice_mode.voice}) · Tab toggles · /help for commands[/dim]",
+                    title="agyspeak",
+                    border_style="green",
+                )
+            )
+            if restored_voice_message and not voice_mode.enabled:
+                console.print(restored_voice_message)
+
+            last_clip: Path | None = None
+            while True:
+                try:
+                    # Keep diagnostics from background model loading above the active
+                    # prompt instead of letting them overwrite terminal UI state.
+                    with patch_stdout(raw=True):
+                        line = session.prompt("› ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    console.print("[dim]bye[/dim]")
+                    break
+                if not line:
+                    continue
+
+                cmd, _, rest = line.partition(" ")
+                rest = rest.strip()
+                match cmd:
+                    case "/quit" | "/q" | "/exit":
+                        break
+                    case "/help" | "/?":
+                        console.print(HELP.strip())
+                    case "/a" | "/rec" | "/r":
+                        clip = _record(device)
+                        if clip is None:
+                            continue
+                        last_clip = clip
+                        note = rest
+                        if not note and cmd != "/a":
+                            try:
+                                note = session.prompt("🎤 note (Enter to send as is) › ").strip()
+                            except (EOFError, KeyboardInterrupt):
+                                console.print("[dim]not sent[/dim]")
+                                continue
+                        last_response = _send(client, note, clip, voice_mode)
+                    case "/last":
+                        if last_clip is None:
+                            latest = audio_mod.RECORDINGS_DIR / "latest.wav"
+                            last_clip = latest.resolve() if latest.exists() else None
+                        if last_clip is None:
+                            console.print("[yellow]no recording yet[/yellow]")
+                            continue
+                        last_response = _send(client, rest, last_clip, voice_mode)
+                    case "/repeat":
+                        console.print(_repeat_last(last_response, voice_mode))
+                    case "/model":
+                        if rest:
+                            client.model = rest
+                            _save_session(client, voice_mode)
+                            _log_session(client)
+                        preferences = client.preferences
+                        console.print(Text(f"model: {preferences.model} · effort: {preferences.effort}"))
+                    case "/effort":
+                        if rest:
+                            if rest not in EFFORT_LEVELS:
+                                console.print(Text("usage: /effort [low|medium|high]", style="yellow"))
+                                continue
+                            client.effort = rest
+                            _save_session(client, voice_mode)
+                            _log_session(client)
+                        console.print(Text(f"effort: {client.effective_effort}"))
+                    case "/models":
+                        try:
+                            console.print(Text("\n".join(client.models(on_event=_agent_notice))))
+                        except (RuntimeError, ValueError, OSError) as exc:
+                            console.print(Text(f"Antigravity: {exc}", style="red"))
+                    case "/new":
+                        client.reset()
+                        last_response = ""
+                        _save_session(client, voice_mode, last_response)
+                        console.print("[dim]new conversation[/dim]")
+                    case "/id":
+                        console.print(client.conversation_id or "[dim]none yet[/dim]")
+                    case "/sessions":
+                        _print_sessions()
+                    case "/devices":
+                        for idx, name in audio_mod.list_input_devices():
+                            marker = "*" if idx == device else " "
+                            console.print(f" {marker} {idx}: {name}")
+                    case "/voice":
+                        if rest:
+                            console.print(voice_mode.select(rest))
+                        else:
+                            state = "on" if voice_mode.enabled else "off"
+                            console.print(f"voice: [bold]{voice_mode.voice}[/bold] · mode {state}")
+                    case "/voices":
+                        console.print("  ".join(tts.kokoro_voices()))
+                    case "/speech":
+                        console.print(_speech_command(rest, voice_mode.voice))
+                    case _ if cmd.startswith("/"):
+                        console.print(f"[yellow]unknown command {cmd}[/yellow] (try /help)")
+                    case _:
+                        last_response = _send(client, line, None, voice_mode)
+
+        finally:
+            speech_service.close()
     if client.conversation_id:
         _log_session(client)
         console.print(

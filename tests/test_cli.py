@@ -1,9 +1,13 @@
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from agyspeak import cli
+from agyspeak.events import AuthenticationRequired, ToolProgress
+from agyspeak.sessions import SessionPreferences
 
 
 class _Buffer:
@@ -147,7 +151,7 @@ def test_last_model_reply_survives_session_updates(monkeypatch, tmp_path) -> Non
     state_file = tmp_path / "last_session.json"
     monkeypatch.setattr(cli, "STATE_DIR", tmp_path)
     monkeypatch.setattr(cli, "LAST_SESSION", state_file)
-    client = SimpleNamespace(model="gemini-test", conversation_id="conversation-1")
+    client = SimpleNamespace(preferences=SessionPreferences("conversation-1", "gemini-test", "high"), conversation_id="conversation-1")
 
     cli._save_session(client, cli.VoiceMode(enabled=True), "Last model reply")
     cli._save_session(client, cli.VoiceMode(voice="am_echo", enabled=False))
@@ -208,18 +212,14 @@ def test_voice_mode_routes_swedish_and_returns_to_selected_voice(monkeypatch) ->
 
 def test_tool_description_includes_file_and_read_range() -> None:
     path = Path.home() / '.cache/agyspeak/recordings/clip.wav'
-    assert cli._tool_description({
-        'tool_name': 'read_file', 'tool_info': {'parameters': {
+    assert cli._tool_description(ToolProgress('call', 'read_file', {
             'Path': str(path), 'StartLine': 1, 'EndLine': 20, 'ByteOffset': 500,
-        }},
-    }) == 'read_file · ~/.cache/agyspeak/recordings/clip.wav · lines 1–20 · byte 500'
+        })) == 'read_file · ~/.cache/agyspeak/recordings/clip.wav · lines 1–20 · byte 500'
 
 
 def test_tool_description_shows_command_without_interpreting_markup() -> None:
-    assert cli._tool_description({
-        'tool_name': 'run_command', 'tool_info': {'parameters': {'CommandLine': 'tail -n 20 [file]'}},
-    }) == 'run_command · tail -n 20 [file]'
-    assert cli._tool_description({'tool_name': 'read_file'}) == 'read_file'
+    assert cli._tool_description(ToolProgress('call', 'run_command', {'CommandLine': 'tail -n 20 [file]'})) == 'run_command · tail -n 20 [file]'
+    assert cli._tool_description(ToolProgress('call', 'read_file', {})) == 'read_file'
 
 
 def test_tool_description_shows_search_query_and_url() -> None:
@@ -227,17 +227,99 @@ def test_tool_description_shows_search_query_and_url() -> None:
         ('search_web', {'query': 'Swedish pronunciation dvärgarnas'}),
         ('read_url_content', {'Url': 'https://example.com/svenska'}),
     ]:
-        description = cli._tool_description({'tool_name': tool, 'tool_info': {'parameters': params}})
+        description = cli._tool_description(ToolProgress('call', tool, params))
         assert next(iter(params.values())) in description
 
 
 def test_unknown_tool_shows_arguments_and_bounds_multiline_details() -> None:
-    description = cli._tool_description({'tool_name': 'new_tool', 'tool_info': {'parameters': {
+    description = cli._tool_description(ToolProgress('call', 'new_tool', {
         'toolSummary': 'Look up a reference', 'request': {'term': 'hej'},
         'text': 'a long line\n' * 100,
-    }}})
+    }))
     assert 'Look up a reference' in description
     assert 'request={"term": "hej"}' in description
     assert '\n' not in description
     assert len(description) <= len('new_tool · ') + 240
     assert description.endswith('…')
+
+
+def test_send_prompts_for_permission_and_restores_callback(monkeypatch):
+    from agyspeak.backend import Turn
+
+    choices = []
+    previous = lambda params: False
+    client = SimpleNamespace(model='test', conversation_id=None, on_permission=previous)
+    def send(text, clip, on_event):
+        assert client.on_permission(ToolProgress('call', 'Read recording', {'Path': '/tmp/a.wav'}))
+        return Turn(response='Hej!')
+    client.send = send
+    monkeypatch.setattr(cli.Confirm, 'ask', lambda *args, **kwargs: choices.append(kwargs) or True)
+    monkeypatch.setattr(cli, '_render_turn', lambda *args: None)
+    monkeypatch.setattr(cli, '_save_session', lambda *args: None)
+    monkeypatch.setattr(cli, '_log_session', lambda *args: None)
+    assert cli._send(client, 'hello', None, cli.VoiceMode()) == 'Hej!'
+    assert choices[0]['default'] is False
+    assert client.on_permission is previous
+
+
+def test_notices_show_only_structured_sign_in_message(monkeypatch):
+    import io
+    from rich.console import Console
+
+    output = io.StringIO()
+    monkeypatch.setattr(cli, 'console', Console(file=output, width=120))
+    cli._agent_notice({'event': 'diagnostic', 'text': 'Sign in info https://example.com {account dump}'})
+    assert output.getvalue() == ''
+    cli._agent_notice(AuthenticationRequired())
+    assert output.getvalue().strip() == 'Sign in to Antigravity in your browser to continue.'
+
+
+def test_force_stop_prompt_defaults_to_waiting(monkeypatch):
+    choices = []
+    monkeypatch.setattr(cli.Confirm, 'ask', lambda *args, **kwargs: choices.append(kwargs) or False)
+    assert cli._confirm_force_stop() is False
+    assert choices[0]['default'] is False
+
+
+def test_interrupted_force_stop_prompt_keeps_waiting(monkeypatch):
+    def interrupt(*args, **kwargs):
+        raise KeyboardInterrupt
+    monkeypatch.setattr(cli.Confirm, 'ask', interrupt)
+    assert cli._confirm_force_stop() is False
+
+
+@pytest.mark.parametrize('options,expected_model,expected_effort', [
+    (['-c'], 'gemini-3.8-flash', 'high'),
+    (['-c', '--model=other-model', '--effort', 'low'], 'other-model', 'low'),
+])
+def test_resume_reports_saved_preferences_and_honors_explicit_overrides(
+    monkeypatch, tmp_path, options, expected_model, expected_effort,
+):
+    import sys
+    from typer.testing import CliRunner
+    from agyspeak.backend import AgyClient
+
+    last = tmp_path / 'last.json'
+    last.write_text(json.dumps({'conversation_id': 'existing-chat', 'model': 'gemini-3.8-flash', 'effort': 'high'}))
+    monkeypatch.setattr(cli, 'STATE_DIR', tmp_path)
+    monkeypatch.setattr(cli, 'LAST_SESSION', last)
+    monkeypatch.setattr(cli, 'SESSIONS', tmp_path / 'sessions.jsonl')
+    commands = iter(['/model', '/effort medium', '/q'])
+    monkeypatch.setattr(cli, 'PromptSession', lambda **kwargs: SimpleNamespace(prompt=lambda *args: next(commands)))
+    service = SimpleNamespace(start=lambda: None, close=lambda: None)
+    monkeypatch.setattr(cli.worker, 'HarnessSpeechService', lambda: service)
+    monkeypatch.setattr(cli, 'AgyClient', lambda **kwargs: AgyClient(binary=sys.executable, **kwargs))
+    result = CliRunner().invoke(cli.app, options)
+    assert result.exit_code == 0, result.exception
+    assert f'model: {expected_model} · effort: {expected_effort}' in result.output
+    assert json.loads(last.read_text())['effort'] == 'medium'
+
+
+def test_invalid_effort_is_rejected_before_client_startup(monkeypatch):
+    from typer.testing import CliRunner
+    def unexpected_start(**kwargs):
+        raise AssertionError('client must not start')
+    monkeypatch.setattr(cli, 'AgyClient', unexpected_start)
+    result = CliRunner().invoke(cli.app, ['--effort', 'invalid'])
+    assert result.exit_code == 2
+    assert 'choose low, medium, or high' in result.output

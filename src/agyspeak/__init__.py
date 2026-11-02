@@ -1,1 +1,1 @@
-"""agyspeak: terminal voice chat with Gemini via the Antigravity CLI."""
+"""agyspeak: terminal voice chat with Gemini via official Antigravity ACP."""

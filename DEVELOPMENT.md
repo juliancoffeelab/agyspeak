@@ -7,44 +7,124 @@ than the repository or the directory where you launched AGSpeak. This keeps the
 project out of its immediate workspace; existing file-access permissions still
 apply.
 
-Each turn runs `agy --print --output-format stream-json`, with `--conversation <id>`
-after the first turn so context carries over. AGSpeak passes `--sandbox` to isolate
-shell commands. Command approval still follows your existing Antigravity policy;
-AGSpeak does not grant automatic command approval or change global settings.
+AGSpeak runs Google's official `antigravity-acp` runtime as one persistent
+JSON-RPC subprocess. It no longer wraps `agy --print`. ACP sessions preserve
+context across turns; `/new` starts a fresh session and `--conversation <id>` or
+`-c` resumes a saved session. A failed resume is reported rather than silently
+starting an empty conversation. Older CLI conversation IDs may not be loadable
+by the ACP runtime; start a new conversation if it rejects an old ID.
 
-Each audio turn includes the absolute
-recording path and asks Gemini to open it with its native file-viewing tool. That
-tool returns the WAV as native audio, so Gemini can hear pronunciation and prosody.
+## ACP runtime and authentication
 
-On the first turn of a new conversation a short preamble is prepended telling the
-model it is a general multimodal assistant, how to open native audio, and that
-language learning is a common use. Override it with `--system "..."` or drop it
-with `--no-system`. Resumed conversations already carry it in their history.
+Install the pinned official runtime (currently 1.4.5) from the repository root:
 
-Things learned the hard way:
+```sh
+uv run python -m agyspeak.acp_runtime
+```
 
-- `agy --print` sends `@/path.wav` references as plain text. Its native file-viewing
-  tool (`view_file`, named `read_file` in some toolsets) returns audio to the model.
-  Every audio turn explicitly requests that tool, including in resumed sessions.
-  No shell permission bypass or external transcription service is needed.
-- The model knows your macOS username regardless of where recordings live: agy's
-  own system prompt includes its home, scratch, and MCP directories. Hiding it
-  would mean faking `$HOME`, which would break agy's auth and config.
-- The `google-antigravity` Python SDK talks to the Gemini API directly and needs
-  `GEMINI_API_KEY`, so it does not use the subscription. That is why this shells
-  out to `agy` instead.
+The installer downloads from Google's CDN, verifies the ACP Registry SHA-256,
+and keeps both `agy_acp_server.par` and its required sibling
+`localharness_external` under
+`~/.local/share/agyspeak/antigravity-acp/1.4.5/`. It does not authenticate or make
+inference requests. Alternatively, put `agy_acp_server.par` on PATH or set
+`AGYSPEAK_ACP_BINARY` to the executable from a complete official distribution.
 
-## Turn logs and blocked requests
+The first message or `/models` may open the runtime's own browser sign-in flow
+using `oauth-personal`. ACP keeps its own authentication; AGSpeak does not read
+or copy CLI credentials. No API key is needed for this personal-account flow.
 
-Raw CLI output is saved for every turn under `~/.cache/agyspeak/turns/`, in
-separate timestamped `.log` files. These preserve the JSON event stream and CLI
-diagnostics before parsing, including partial turns, for investigating output
-issues. The `init` event identifies the conversation. Logs stay local and are
-kept until you delete them.
+`/models` lists the runtime's actual model catalog without submitting a prompt.
+`/model <id>` selects from that catalog. The default is `gemini-3.8-flash`.
+The default thinking level is `medium`; `--effort low|medium|high` overrides the
+separate ACP thinking-level selector. `/model` reports the model and thinking
+level together. `/effort` reports the current level; `/effort low|medium|high`
+changes it for the next message without starting a new conversation. Saved
+CLI model IDs such as `gemini-3.8-flash-medium` are mapped to the base model and
+thinking level. Unavailable models are reported before a prompt is sent.
+Model, effort, and conversation ID share one `SessionPreferences` representation.
+Both the last-session file and session index preserve effort; explicit `--model`
+and `--effort` options override saved settings on resume. Last-session writes use
+an atomic replacement, so a failed write leaves the previous record intact.
 
-If Antigravity blocks a tool request and returns no answer, AGSpeak continues
-the same conversation once, asking for an answer from existing context without
-further tools. The denied operation stays blocked; the recording is not resent.
+The normal ACP mode is `default`. Permission requests are shown in the terminal
+and require an explicit allow-once answer; noninteractive backend users reject
+requests unless they supply a permission callback. `--yolo` explicitly selects
+ACP's `yolo` mode and approves permission requests. AGSpeak does not advertise
+client filesystem or terminal execution capabilities. The official runtime
+executes its own tools and controls their sandbox; the old CLI `--sandbox` flag
+is not forwarded to ACP.
+
+## Native audio and prompts
+
+When `initialize` advertises the audio prompt capability, AGSpeak sends the
+recording as an ACP native audio block with its MIME type and base64 bytes.
+Google's official 1.4.5 runtime advertises this capability. If a runtime does not
+advertise audio, each turn instead includes the absolute recording path and
+asks the agent to open it with its native file-viewing tool. There is no external
+transcription service. Long WAVs retain the existing lossless splitting and
+ordered multipart conversation flow.
+
+On the first prompt of a new session a short preamble explains the multimodal
+assistant role, language learning, and speech markup. Override it with
+`--system "..."` or omit it with `--no-system`. Resumed sessions keep their
+existing instructions. Native audio attachments do not require file tools.
+
+## Turn logs and interruption
+
+Incoming ACP JSON and separate stderr diagnostics are saved for each turn under
+`~/.cache/agyspeak/turns/`, in timestamped `.log` files. They include thought and
+tool events for diagnosis; only agent message chunks become the displayed and
+spoken answer. All runtime stderr, including startup and `/models` diagnostics,
+is also saved to `~/.cache/agyspeak/acp.log`. Raw diagnostics are never forwarded
+to the terminal; authentication uses a separate, short sign-in notice. Runtime
+exit errors point to the diagnostic log. Logs stay local until deleted. Prompts
+and outgoing audio bytes are not written to these logs.
+
+Permission denials are returned to the running agent so it can finish its turn.
+AGSpeak does not submit an extra recovery prompt or automatically retry inference
+errors. Timeout, interruption, malformed protocol output, or a failed event
+callback shuts down the connection. A later turn reconnects and attempts to
+resume the saved session.
+Request deadlines cover sending audio bytes as well as waiting for responses.
+An interrupted active prompt sends ACP `session/cancel` before closing stdin;
+pending tool permission requests receive a cancelled outcome. If an upload was
+only partially sent, the connection is closed without appending more JSON.
+Exit cleanup first closes stdin to request an orderly shutdown and waits up to
+two seconds for the entire process group, allowing children to finish saving
+after their parent exits. If it stalls, the terminal asks whether to force stop,
+with **No** (keep waiting) as the default. Declining waits another five seconds
+before asking again. Only an explicit Yes sends SIGTERM and, if that fails to
+stop the group within another second, SIGKILL. Approval is recorded in `acp.log`.
+Backend users without a force-stop callback keep waiting; `--yolo` does not
+authorize forced shutdown.
+Output readers close their own pipes, so an inherited open pipe
+cannot block the terminal's shutdown while another thread is reading it.
+Connections explicitly track open, closing, and closed states. Interrupted
+cleanup can be retried, and a closing connection is never reused. Library callers
+own client lifetimes with `with AgyClient(...) as client:`; evaluation jobs each
+close their own client. The terminal owns its chat client and speech service
+through scoped cleanup rather than hidden interpreter-exit registrations.
+
+## Backend boundaries
+
+`acp.py` owns JSON-RPC transport, subprocess lifecycle, deadlines, and cancellation.
+`backend.py` owns Antigravity authentication, session configuration, prompts, and
+audio turns. It emits four application events from `events.py`: text deltas, tool
+progress, audio-part progress, and sign-in requests. The terminal renders these
+events without depending on ACP wire fields or the removed print-mode stream.
+`sessions.py` holds session preferences and atomic last-session writes.
+
+The client intentionally supports one request at a time and stays specific to
+Antigravity. A provider framework and concurrent-session orchestration are out
+of scope.
+
+The focused backend tests use a local fake ACP subprocess. They exercise
+streaming, permissions, native audio, fallback paths, resumption, authentication
+messages, model selection, and process cleanup without provider requests:
+
+```sh
+uv run pytest tests/test_acp.py tests/test_backend.py tests/test_acp_runtime.py tests/test_cli.py tests/test_sessions.py tests/test_audio.py
+```
 
 ## Voice prompt conventions
 

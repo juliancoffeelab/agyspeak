@@ -1,40 +1,33 @@
-"""Thin wrapper around `agy --print` with stream-json output."""
+"""Voice chat through Google's official Antigravity ACP runtime."""
 
 from __future__ import annotations
 
+import base64
 import json
 import os
-import signal
 import shutil
-import subprocess
 import tempfile
-import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from agyspeak.acp import AcpConnection, AcpError
+from agyspeak.acp_runtime import RUNTIME_BINARY
+from agyspeak.events import AudioPart, AuthenticationRequired, ChatEvent, TextDelta, ToolProgress
+from agyspeak.sessions import DEFAULT_MODEL, EFFORT_LEVELS, SessionPreferences
+
 TURN_LOG_DIR = Path.home() / ".cache" / "agyspeak" / "turns"
 AGY_WORKSPACE = Path.home() / ".cache" / "agyspeak" / "workspace"
+ACP_DIAGNOSTIC_LOG = Path.home() / ".cache" / "agyspeak" / "acp.log"
 
-DEFAULT_MODEL = "gemini-3.8-flash-medium"
 DEFAULT_VOICE_PROMPT = "Listen to this voice message and respond to it."
-DENIAL_RECOVERY_PROMPT = (
-    "The tool request was denied. The denial stands: do not retry it or access "
-    "the same resource through another tool. Respond to my preceding request "
-    "now using the conversation and any audio already available. Do not call "
-    "any more tools or inspect conversation logs. If you lack information "
-    "needed to answer, explain what is missing instead of guessing. "
-    "Return only the answer addressed to me, without planning or thinking text."
-)
-# agy has an unavoidable five-minute default and treats zero/negative values as
-# immediate expiry. This is Go's largest whole-second duration (~292 years).
-UNBOUNDED_PRINT_TIMEOUT = "2562047h47m16s"
 DEFAULT_PREAMBLE = """\
 You are a general multimodal assistant talking with the user in a terminal chat. \
 This is not a coding session. The user may type or send voice recordings, and you \
-receive a path to each recording. Open it with the native file-viewing tool \
+receive native audio attachments or a path to each recording. Listen to attached \
+audio directly. For paths, open the recording with the native file-viewing tool \
 (view_file, or read_file in some toolsets), which returns audio you can listen to. \
 Do not use shell commands or external transcription tools to process recordings. \
 A common use is language learning: transcribe or answer what was said, \
@@ -58,9 +51,6 @@ explanations for isolated sounds. Close every scope. Tags affect only their \
 contents and are hidden in the text display; normal Markdown still works inside. \
 Legacy <swedish>...</swedish> is also supported."""
 
-Event = dict
-
-
 @dataclass
 class Turn:
     response: str = ""
@@ -77,43 +67,175 @@ class AgyNotFound(RuntimeError):
     pass
 
 
+def resolve_binary(binary: str | None = None) -> str:
+    requested = binary or os.environ.get("AGYSPEAK_ACP_BINARY")
+    if requested:
+        found = shutil.which(str(Path(requested).expanduser()))
+    else:
+        found = shutil.which("agy_acp_server.par") or (
+            str(RUNTIME_BINARY) if os.access(RUNTIME_BINARY, os.X_OK) else None
+        )
+    if not found:
+        raise AgyNotFound(
+            "Official Antigravity ACP runtime not found. Install it with "
+            "`uv run python -m agyspeak.acp_runtime` from the repository root, "
+            "or set AGYSPEAK_ACP_BINARY to agy_acp_server.par."
+        )
+    return found
+
+
+def _select_values(options: list[dict]) -> list[str]:
+    values = []
+    for option in options:
+        if "options" in option:
+            values.extend(_select_values(option["options"]))
+        elif "value" in option:
+            values.append(option["value"])
+    return values
+
+
 @dataclass
 class AgyClient:
     model: str = DEFAULT_MODEL
     effort: str | None = None
     yolo: bool = False
     conversation_id: str | None = None
-    binary: str = "agy"
+    binary: str | None = None
     preamble: str | None = DEFAULT_PREAMBLE
     turn_timeout: float | None = None
+    # None means reject permission requests. The terminal supplies an interactive callback.
+    on_permission: Callable[[ToolProgress], bool] | None = field(default=None, repr=False)
+    on_force_stop: Callable[[], bool] | None = field(default=None, repr=False)
+    _connection: AcpConnection | None = field(default=None, init=False, repr=False)
+    _capabilities: dict = field(default_factory=dict, init=False, repr=False)
+    _active_session: str | None = field(default=None, init=False, repr=False)
+    _config: list[dict] = field(default_factory=list, init=False, repr=False)
+    _preamble_pending: bool = field(default=False, init=False, repr=False)
 
     def __post_init__(self) -> None:
-        if shutil.which(self.binary) is None:
-            raise AgyNotFound(f"`{self.binary}` not found on PATH; install the Antigravity CLI")
+        self.binary = resolve_binary(self.binary)
+
+    def __enter__(self) -> "AgyClient":
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        if self._connection:
+            self._connection.close()
+            self._connection = None
+        self._active_session = None
 
     def reset(self) -> None:
         self.conversation_id = None
+        self._active_session = None
+        self._config = []
+        self._preamble_pending = False
 
-    def _argv(self, prompt: str) -> list[str]:
-        argv = [
-            self.binary,
-            "--model",
-            self.model,
-            "--output-format",
-            "stream-json",
-            "--print-timeout",
-            UNBOUNDED_PRINT_TIMEOUT,
-            "--disable-slash-commands",
-            "--sandbox",
-        ]
-        if self.effort:
-            argv += ["--effort", self.effort]
-        if self.yolo:
-            argv.append("--dangerously-skip-permissions")
+    @property
+    def effective_effort(self) -> str:
+        return self.preferences.effort
+
+    @property
+    def preferences(self) -> SessionPreferences:
+        if self.effort is not None and self.effort not in EFFORT_LEVELS:
+            raise ValueError("Thinking level must be low, medium, or high")
+        return SessionPreferences.from_record({
+            "conversation_id": self.conversation_id, "model": self.model, "effort": self.effort,
+        })
+
+    def resume(self, preferences: SessionPreferences, *, model: str | None = None, effort: str | None = None) -> None:
+        self.reset()
+        self.conversation_id = preferences.conversation_id
+        self.model = model if model is not None else preferences.model
+        self.effort = effort if effort is not None else preferences.effort
+
+    def _connect(self) -> AcpConnection:
+        if self._connection and not self._connection.usable:
+            self.close()
+        if self._connection is None:
+            AGY_WORKSPACE.mkdir(parents=True, exist_ok=True)
+            self._connection = AcpConnection(self.binary, AGY_WORKSPACE, ACP_DIAGNOSTIC_LOG)
+            self._connection.on_force_stop = self.on_force_stop
+            try:
+                initialized = self._connection.request("initialize", {
+                    "protocolVersion": 1, "clientCapabilities": {},
+                    "clientInfo": {"name": "agyspeak", "version": "0.1.0"},
+                }, timeout=60)
+                if initialized.get("protocolVersion") != 1:
+                    raise RuntimeError("Antigravity ACP did not negotiate protocol v1")
+                self._capabilities = initialized.get("agentCapabilities", {})
+            except BaseException:
+                self.close()
+                raise
+        return self._connection
+
+    def _session(self, connection: AcpConnection, on_event: Callable[[ChatEvent], None] | None = None) -> None:
+        if self._active_session == self.conversation_id and self.conversation_id:
+            return
+        params = {"cwd": str(AGY_WORKSPACE), "mcpServers": []}
         if self.conversation_id:
-            argv += ["--conversation", self.conversation_id]
-        argv += ["-p", prompt]
-        return argv
+            capabilities = self._capabilities.get("sessionCapabilities", {})
+            if "resume" in capabilities:
+                method = "session/resume"
+            elif self._capabilities.get("loadSession"):
+                method = "session/load"
+            else:
+                raise RuntimeError("This ACP runtime cannot resume saved conversations")
+            params["sessionId"] = self.conversation_id
+        else:
+            method = "session/new"
+        try:
+            result = connection.request(method, params, timeout=60)
+        except AcpError as exc:
+            if exc.code != -32000:  # ACP authentication required; never retry prompts.
+                raise
+            if on_event:
+                on_event(AuthenticationRequired())
+            connection.request("authenticate", {"methodId": "oauth-personal"}, timeout=300)
+            result = connection.request(method, params, timeout=60)
+        if method == "session/new":
+            self.conversation_id = result["sessionId"]
+            self._preamble_pending = True
+        self._active_session = self.conversation_id
+        self._config = result.get("configOptions", [])
+
+    def _configure(self, connection: AcpConnection, category: str, value: str) -> None:
+        option = next((o for o in self._config if o.get("category") == category or o.get("id") == category), None)
+        if option is None:
+            raise RuntimeError(f"Antigravity ACP does not expose a {category} selector")
+        values = _select_values(option.get("options", []))
+        if value not in values:
+            raise ValueError(f"ACP {category} {value!r} is unavailable. Available: {', '.join(values)}")
+        if option.get("currentValue") != value:
+            result = connection.request("session/set_config_option", {
+                "sessionId": self.conversation_id, "configId": option["id"], "value": value,
+            }, timeout=60)
+            if "configOptions" in result:
+                self._config = result["configOptions"]
+            else:
+                option["currentValue"] = value
+
+    def models(self, on_event: Callable[[ChatEvent], None] | None = None) -> list[str]:
+        connection = self._connect()
+        listing_only = self.conversation_id is None
+        try:
+            self._session(connection, on_event)
+            option = next((o for o in self._config if o.get("category") == "model" or o.get("id") == "model"), {})
+            return _select_values(option.get("options", []))
+        finally:
+            # Do not save a catalog-only session as a conversation: no first
+            # prompt (or preamble) has been sent to it.
+            if listing_only:
+                self.reset()
+
+    def _configure_model(self, connection: AcpConnection) -> None:
+        preferences = self.preferences
+        self._configure(connection, "model", preferences.model)
+        self._configure(connection, "thought_level", preferences.effort)
+        self.model = preferences.model
+        self.effort = preferences.effort
 
     @staticmethod
     def build_prompt(text: str, audio: Path | None) -> str:
@@ -122,8 +244,7 @@ class AgyClient:
             return text
         if not text:
             text = DEFAULT_VOICE_PROMPT
-        # Print mode sends @paths as text. The native file viewer returns the WAV
-        # as model-visible audio; repeat this instruction for resumed chats too.
+        # Fallback for runtimes without native audio prompt capability.
         path = json.dumps(str(audio.resolve()), ensure_ascii=False)
         return (
             f"{text}\n\n"
@@ -140,7 +261,7 @@ class AgyClient:
         self,
         text: str,
         audio: Path | None = None,
-        on_event: Callable[[Event], None] | None = None,
+        on_event: Callable[[ChatEvent], None] | None = None,
     ) -> Turn:
         from agyspeak.audio import prepare_for_model
 
@@ -151,13 +272,13 @@ class AgyClient:
                 audio, text = candidate, ""
         parts = prepare_for_model(audio) if audio is not None and audio.is_file() else [audio]
         if len(parts) == 1:
-            return self._send_with_recovery(text, parts[0], on_event)
+            return self._send_once(text, parts[0], on_event)
 
         started = time.monotonic()
         request = text.strip() or DEFAULT_VOICE_PROMPT
         for index, part in enumerate(parts, 1):
             if on_event:
-                on_event({"event": "audio_part", "index": index, "total": len(parts), "path": str(part)})
+                on_event(AudioPart(index, len(parts), part))
             if index < len(parts):
                 acknowledgment = f"Received part {index}/{len(parts)}."
                 prompt = (
@@ -171,125 +292,109 @@ class AgyClient:
                     f"This is the final part {index}/{len(parts)} of the recording. "
                     "Listen, then answer the user's request using all parts in order:\n" + request
                 )
-            turn = self._send_with_recovery(prompt, part, on_event)
+            turn = self._send_once(prompt, part, on_event)
             if index < len(parts) and turn.response.strip() != acknowledgment:
                 turn.notes.append(f"Stopped at audio part {index}/{len(parts)}: no acknowledgment received.")
                 break
         turn.duration = time.monotonic() - started
         return turn
 
-    def _send_with_recovery(
-        self,
-        text: str,
-        audio: Path | None = None,
-        on_event: Callable[[Event], None] | None = None,
-    ) -> Turn:
-        turn = self._send_once(text, audio, on_event)
-        if turn.response.strip() or not turn.denied_actions or not self.conversation_id:
-            return turn
-        # Print mode exits on some permission denials. Continue once without
-        # replaying the recording or granting the denied operation.
-        recovery = self._send_once(DENIAL_RECOVERY_PROMPT, on_event=on_event)
-        recovery.duration += turn.duration
-        recovery.notes = turn.notes + [
-            "Tool request denied; continued once to request an answer without tools."
-        ] + recovery.notes
-        recovery.denied_actions = turn.denied_actions + recovery.denied_actions
-        return recovery
-
     def _send_once(
         self,
         text: str,
         audio: Path | None = None,
-        on_event: Callable[[Event], None] | None = None,
+        on_event: Callable[[ChatEvent], None] | None = None,
     ) -> Turn:
-        prompt = self.build_prompt(text, audio)
-        if self.preamble and not self.conversation_id:
-            prompt = f"{self.preamble}\n\n{prompt}"
         TURN_LOG_DIR.mkdir(parents=True, exist_ok=True)
-        AGY_WORKSPACE.mkdir(parents=True, exist_ok=True)
+        started = time.monotonic()
         with tempfile.NamedTemporaryFile(
             mode="w", encoding="utf-8", buffering=1,
             prefix=datetime.now().strftime("%Y%m%d-%H%M%S-"), suffix=".log",
             dir=TURN_LOG_DIR, delete=False,
         ) as raw_log:
-            proc = subprocess.Popen(
-                self._argv(prompt),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-                cwd=AGY_WORKSPACE,
-                start_new_session=True,
-            )
             turn = Turn(log_path=Path(raw_log.name))
-            started = time.monotonic()
-            finished = threading.Event()
-            timed_out = threading.Event()
+            connection = self._connect()
+            connection.log = raw_log
+            # Session loading may replay old messages; only collect the new prompt below.
+            connection.on_notification = lambda method, params: None
+            tool_calls: dict[str, dict] = {}
 
-            def watch() -> None:
-                while not finished.wait(0.1):
-                    expired = self.turn_timeout and time.monotonic() - started > self.turn_timeout
-                    if not expired:
-                        continue
-                    if expired:
-                        timed_out.set()
-                    try:
-                        os.killpg(proc.pid, signal.SIGTERM)
-                        if not finished.wait(2):
-                            os.killpg(proc.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
+            def notification(method: str, params: dict) -> None:
+                if method != "session/update" or params.get("sessionId") != self.conversation_id:
                     return
-
-            if self.turn_timeout is not None:
-                threading.Thread(target=watch, daemon=True).start()
-            assert proc.stdout is not None
-            try:
-                for line in proc.stdout:
-                    raw_log.write(line)
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        event = json.loads(line)
-                    except json.JSONDecodeError:
-                        turn.notes.append(line)
-                        continue
+                update = params.get("update", {})
+                kind = update.get("sessionUpdate")
+                if kind == "agent_message_chunk":
+                    content = update.get("content", {})
+                    if content.get("type") == "text":
+                        delta = content.get("text", "")
+                        turn.response += delta
+                        if on_event:
+                            on_event(TextDelta(delta))
+                elif kind in {"tool_call", "tool_call_update"}:
+                    call_id = update.get("toolCallId", "")
+                    call = tool_calls.setdefault(call_id, {})
+                    call.update(update)
+                    raw_input = call.get("rawInput") or {}
+                    if not isinstance(raw_input, dict):
+                        raw_input = {"input": raw_input}
                     if on_event:
-                        on_event(event)
-                    if event.get("event") == "result":
-                        result = event.get("result", {})
-                        turn.response = result.get("response", "")
-                        turn.conversation_id = result.get("conversation_id")
-                        turn.status = result.get("status", "")
-                        turn.usage = result.get("usage", {})
-                        turn.denied_actions = result.get("denied_actions", [])
-                    elif event.get("event") == "init":
-                        turn.conversation_id = event.get("conversation_id") or turn.conversation_id
-                code = proc.wait()
-            finally:
-                finished.set()
-                if self.turn_timeout is not None and proc.poll() is None:
-                    try:
-                        os.killpg(proc.pid, signal.SIGTERM)
-                        proc.wait(timeout=2)
-                    except subprocess.TimeoutExpired:
-                        os.killpg(proc.pid, signal.SIGKILL)
-                        proc.wait()
-                    except ProcessLookupError:
-                        pass
-            if timed_out.is_set():
-                raise TimeoutError("Antigravity did not finish within the turn time limit")
-        # agy's own duration_seconds is cumulative for the conversation, so time it here.
-        turn.duration = time.monotonic() - started
-        if code != 0 and not turn.response:
-            turn.notes.append(f"agy exited with code {code}")
-        if turn.conversation_id:
-            if self.conversation_id and turn.conversation_id != self.conversation_id:
-                turn.notes.append(
-                    f"agy did not resume {self.conversation_id[:8]}; it started a new "
-                    f"conversation {turn.conversation_id[:8]} (context is empty)"
+                        on_event(ToolProgress(call_id, call.get("title", "tool"), raw_input))
+                elif kind == "usage_update":
+                    turn.usage = {"total_tokens": update.get("used", 0), **update}
+                elif kind == "config_option_update":
+                    self._config = update.get("configOptions", self._config)
+
+            def request(method: str, params: dict) -> dict:
+                if method != "session/request_permission":
+                    raise AcpError({"code": -32601, "message": "Client method not supported"})
+                call = params.get("toolCall", {})
+                call = {**tool_calls.get(call.get("toolCallId"), {}), **call}
+                arguments = call.get("rawInput") or {}
+                if not isinstance(arguments, dict):
+                    arguments = {"input": arguments}
+                tool = ToolProgress(call.get("toolCallId", ""), call.get("title", "tool"), arguments)
+                allow = params.get("sessionId") == self.conversation_id and (
+                    self.yolo or bool(self.on_permission and self.on_permission(tool))
                 )
-            self.conversation_id = turn.conversation_id
+                kind = "allow_once" if allow else "reject_once"
+                option = next((o for o in params.get("options", []) if o.get("kind") == kind), None)
+                if not option:
+                    allow = False
+                if not allow:
+                    turn.denied_actions.append({"action": call.get("title", "tool"), **call})
+                outcome = {"outcome": "selected", "optionId": option["optionId"]} if option else {"outcome": "cancelled"}
+                return {"outcome": outcome}
+
+            connection.on_request = request
+            try:
+                self._session(connection, on_event)
+                turn.conversation_id = self.conversation_id
+                self._configure_model(connection)
+                self._configure(connection, "mode", "yolo" if self.yolo else "default")
+                native_audio = audio is not None and self._capabilities.get("promptCapabilities", {}).get("audio", False)
+                prompt = (text.strip() or DEFAULT_VOICE_PROMPT) if native_audio else self.build_prompt(text, audio)
+                if self.preamble and self._preamble_pending:
+                    prompt = f"{self.preamble}\n\n{prompt}"
+                blocks = [{"type": "text", "text": prompt}]
+                if native_audio:
+                    mime = {
+                        ".wav": "audio/wav", ".mp3": "audio/mpeg", ".m4a": "audio/mp4",
+                        ".ogg": "audio/ogg", ".flac": "audio/flac",
+                    }.get(audio.suffix.lower(), "application/octet-stream")
+                    blocks.append({
+                        "type": "audio", "mimeType": mime,
+                        "data": base64.b64encode(audio.read_bytes()).decode("ascii"),
+                    })
+                connection.on_notification = notification
+                result = connection.request("session/prompt", {
+                    "sessionId": self.conversation_id, "prompt": blocks,
+                }, timeout=self.turn_timeout)
+                self._preamble_pending = False
+                turn.status = result.get("stopReason", "")
+            finally:
+                connection.log = None
+                connection.on_notification = lambda method, params: None
+                connection.on_request = None
+        turn.duration = time.monotonic() - started
         return turn

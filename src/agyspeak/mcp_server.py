@@ -1,9 +1,9 @@
-"""MCP server exposing agyspeak's local tools to `agy`.
+"""MCP server exposing AGSpeak's local speech tools to Antigravity.
 
 Register once with:
     agy mcp add agyspeak /path/to/.venv/bin/agyspeak-mcp
 
-Audio is rendered and played by the parent agyspeak harness because agy may
+Audio is rendered and played by the parent agyspeak harness because the agent may
 restart this MCP server between turns.
 """
 
