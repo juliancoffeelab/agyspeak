@@ -4,14 +4,16 @@
   "packageManager": "pnpm@12.15.0",
   "main": "index.ts",
   "dependencies": {
-    "expo": "~58.0.20",
+    "@legendapp/list": "^3.7.1",
+    "expo": "~58.0.22",
     "expo-audio": "~58.0.10",
     "expo-clipboard": "~58.0.4",
     "expo-crypto": "~58.0.7",
     "expo-dev-client": "~58.0.16",
-    "expo-file-system": "~58.0.12",
+    "expo-file-system": "~58.0.13",
     "expo-keep-awake": "~58.0.3",
     "expo-secure-store": "~58.0.2",
+    "expo-sqlite": "~58.0.15",
     "expo-status-bar": "~58.0.4",
     "react": "19.3.0",
     "react-native": "0.88.0",
@@ -41,8 +43,9 @@
     "prebuild": "sh scripts/android.sh prebuild --platform android",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix --max-warnings 0",
-    "check": "pnpm lint && pnpm typecheck",
-    "typecheck": "tsc --noEmit"
+    "check": "pnpm lint && pnpm typecheck && pnpm test",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test tests/*.test.mjs"
   },
   "private": true
 }

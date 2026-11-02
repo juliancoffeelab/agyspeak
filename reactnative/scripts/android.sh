@@ -33,7 +33,10 @@ if [ "${1:-}" = "build-apk" ] || [ "${1:-}" = "build-release" ]; then
   if [ ! -f android/gradlew ]; then
     pnpm exec expo prebuild --platform android --no-install
   fi
-  ./android/gradlew -p android "app:assemble$variant" --max-workers=2 -PreactNativeArchitectures=arm64-v8a "$@"
+  # Expo's native tooling can exhaust the generated 512 MB metaspace limit.
+  ./android/gradlew -p android "app:assemble$variant" --max-workers=2 \
+    '-Dorg.gradle.jvmargs=-Xmx2g -XX:MaxMetaspaceSize=1g' \
+    -PreactNativeArchitectures=arm64-v8a "$@"
   kind=debug
   if [ "$variant" = "Release" ]; then kind=release; fi
   mkdir -p artifacts
