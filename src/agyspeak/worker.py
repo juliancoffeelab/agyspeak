@@ -7,6 +7,7 @@ import os
 import queue
 import socket
 import threading
+from contextlib import nullcontext
 from pathlib import Path
 
 from agyspeak import tts
@@ -56,6 +57,25 @@ def submit_script(path: Path) -> None:
         raise RuntimeError(response.get("error", "speech service rejected the request"))
 
 
+def start_stream(path: Path) -> None:
+    response = _request({"command": "stream_start", "path": str(path)})
+    if not response.get("ok"):
+        raise RuntimeError(response.get("error", "could not start narration"))
+
+
+def append_stream(path: Path, lines: list[dict]) -> bool:
+    response = _request({"command": "stream_append", "path": str(path), "lines": lines})
+    if not response.get("ok"):
+        raise RuntimeError(response.get("error", "could not append narration"))
+    return response.get("accepted", False)
+
+
+def finish_stream(path: Path, *, cancel: bool = False) -> None:
+    response = _request({"command": "stream_finish", "path": str(path), "cancel": cancel})
+    if not response.get("ok"):
+        raise RuntimeError(response.get("error", "could not finish narration"))
+
+
 def replay(path: Path) -> None:
     ensure_running()
     response = _request({"command": "replay", "path": str(path)})
@@ -98,6 +118,43 @@ def status() -> dict:
     return response
 
 
+class _SpeechStream:
+    def __init__(self, path: Path):
+        self.path = path
+        self.script = json.loads(path.read_text())
+        self.pending: queue.Queue[list[dict] | None] = queue.Queue()
+        self.lock = threading.Lock()
+        self.accepting = True
+        self.cancel_event = threading.Event()
+
+    def append(self, lines: list[dict]) -> bool:
+        with self.lock:
+            if not self.accepting:
+                return False
+            self.script["lines"].extend(lines)
+            self.path.write_text(json.dumps(self.script, indent=2) + "\n")
+            self.pending.put(lines)
+            return True
+
+    def finish(self, cancel: bool = False) -> None:
+        with self.lock:
+            if cancel:
+                self.cancel_event.set()
+            if self.accepting:
+                self.accepting = False
+                self.pending.put(None)
+
+    def __iter__(self):
+        while True:
+            lines = self.pending.get()
+            if lines is None or self.cancel_event.is_set():
+                return
+            for line in lines:
+                if self.cancel_event.is_set():
+                    return
+                yield line
+
+
 class _Jobs:
     def __init__(self) -> None:
         self.pending: queue.Queue[dict] = queue.Queue()
@@ -106,6 +163,7 @@ class _Jobs:
         self.current_kind: str | None = None
         self.last_error: str | None = None
         self.stopping = threading.Event()
+        self.stream: _SpeechStream | None = None
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
 
@@ -120,6 +178,10 @@ class _Jobs:
             if self.current_cancel is not None:
                 self.current_cancel.set()
                 stopped = True
+            stream, self.stream = self.stream, None
+        if stream:
+            stream.finish(cancel=True)
+            stopped = True
         while True:
             try:
                 job = self.pending.get_nowait()
@@ -128,6 +190,27 @@ class _Jobs:
             self._cancel_pending(job)
             stopped = True
         return stopped
+
+    def start_stream(self, path: Path) -> None:
+        self.stop()
+        stream = _SpeechStream(path)
+        with self.lock:
+            self.stream = stream
+        self.submit({"kind": "stream", "path": str(path), "stream": stream}, replace=False)
+
+    def append_stream(self, path: Path, lines: list[dict]) -> bool:
+        with self.lock:
+            stream = self.stream
+        return bool(stream and stream.path == path and stream.append(lines))
+
+    def finish_stream(self, path: Path, cancel: bool = False) -> None:
+        with self.lock:
+            stream = self.stream
+        if stream and stream.path == path:
+            if cancel:
+                self.stop()
+            else:
+                stream.finish()
 
     def close(self) -> None:
         self.stopping.set()
@@ -146,11 +229,13 @@ class _Jobs:
 
     @staticmethod
     def _cancel_pending(job: dict) -> None:
-        if job["kind"] != "script":
+        if job["kind"] not in {"script", "stream"}:
             return
         from agyspeak import player
 
         path = Path(job["path"])
+        if job["kind"] == "stream":
+            job["stream"].finish(cancel=True)
         try:
             script = json.loads(path.read_text())
             player._finish_metadata(path, script, "cancelled")
@@ -163,7 +248,7 @@ class _Jobs:
                 job = self.pending.get(timeout=0.2)
             except queue.Empty:
                 continue
-            cancel = threading.Event()
+            cancel = job["stream"].cancel_event if job.get("stream") else threading.Event()
             with self.lock:
                 self.current_cancel = cancel
                 self.current_kind = str(job["kind"])
@@ -177,6 +262,8 @@ class _Jobs:
                 with self.lock:
                     self.current_cancel = None
                     self.current_kind = None
+                    if job.get("stream") is self.stream:
+                        self.stream = None
 
     @staticmethod
     def _run_one(job: dict, cancel: threading.Event) -> None:
@@ -198,22 +285,34 @@ class _Jobs:
                 pass
             return
 
-        script = json.loads(path.read_text())
-        script["status"] = "rendering"
-        path.write_text(json.dumps(script, indent=2) + "\n")
+        stream = job.get("stream")
+        script = stream.script if stream else json.loads(path.read_text())
+        with stream.lock if stream else nullcontext():
+            script["status"] = "rendering"
+            path.write_text(json.dumps(script, indent=2) + "\n")
+        status, error = "completed", None
         try:
-            player.play_lines(
-                script["lines"],
-                pause=float(script.get("pause", 0.4)),
-                output_path=path.with_suffix(".wav"),
-                stop_event=cancel,
-            )
+            if stream:
+                tts.kokoro_narrate_streaming(
+                    stream, pause=0.0, output_path=path.with_suffix(".wav"),
+                    stop_event=cancel, start_buffer_seconds=0.0,
+                )
+            else:
+                player.play_lines(
+                    script["lines"], pause=float(script.get("pause", 0.4)),
+                    output_path=path.with_suffix(".wav"), stop_event=cancel,
+                )
         except tts.SpeechCancelled:
-            player._finish_metadata(path, script, "cancelled")
+            status = "cancelled"
+        except tts.NoAudioError as exc:
+            if script["lines"]:
+                status, error = "failed", str(exc)
         except Exception as exc:
-            player._finish_metadata(path, script, "failed", str(exc))
-        else:
-            player._finish_metadata(path, script, "completed")
+            status, error = "failed", str(exc)
+        if stream and stream.cancel_event.is_set():
+            status, error = "cancelled", None
+        with stream.lock if stream else nullcontext():
+            player._finish_metadata(path, script, status, error)
 
 
 def _reply(connection: socket.socket, payload: dict) -> None:
@@ -270,6 +369,15 @@ def serve(path: Path, ready: threading.Event | None = None) -> None:
                                     "path": payload[key],
                                 }
                             )
+                            _reply(connection, {"ok": True})
+                        elif command == "stream_start":
+                            jobs.start_stream(Path(payload["path"]))
+                            _reply(connection, {"ok": True})
+                        elif command == "stream_append":
+                            accepted = jobs.append_stream(Path(payload["path"]), payload["lines"])
+                            _reply(connection, {"ok": True, "accepted": accepted})
+                        elif command == "stream_finish":
+                            jobs.finish_stream(Path(payload["path"]), cancel=payload.get("cancel", False))
                             _reply(connection, {"ok": True})
                         elif command == "stop":
                             _reply(connection, {"ok": True, "stopped": jobs.stop()})

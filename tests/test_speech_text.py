@@ -4,7 +4,9 @@ from agyspeak.speech_text import (
     for_speech,
     narration_chunks,
     normalize_for_speech,
+    StreamingSpeech,
 )
+import pytest
 
 
 def test_for_speech_removes_markdown_but_keeps_prose() -> None:
@@ -163,3 +165,48 @@ def test_swedish_tags_in_fenced_code_do_not_change_language() -> None:
     assert [(part.text, part.language) for part in narration_chunks(
         '```xml\n<swedish>hej</swedish>\n```\n\nHello.'
     )] == [('Hello.', 'en')]
+
+
+def test_streaming_emits_first_paragraph_before_response_finishes():
+    stream = StreamingSpeech()
+    assert stream.feed('First para') == []
+    assert stream.feed('graph.\n\n') == narration_chunks('First paragraph.')
+    assert stream.feed('Final paragraph') == []
+    assert stream.finish() == narration_chunks('Final paragraph')
+
+
+def test_streaming_holds_poetry_until_scope_closes_and_preserves_voice():
+    stream = StreamingSpeech()
+    assert stream.feed('<speak voice="Lars">\nEn rad\n\nEn annan rad') == []
+    assert stream.feed('\n</speak>') == []
+    chunks = stream.feed('\n\n')
+    assert len(chunks) == 1
+    assert chunks[0].text == 'En rad\n\nEn annan rad'
+    assert chunks[0].voice == 'Lars'
+    assert stream.finish() == []
+
+
+@pytest.mark.parametrize('source', [
+    'First paragraph.\n\nSecond paragraph.',
+    '<speak voice="Lars">\nFörsta raden\n\nAndra raden\n</speak>\n\nBack to English.',
+    'Before\n\n```xml\n<speak voice="Lars">\n\nhej\n\n</speak>\n```\n\nAfter.',
+    '`<speak voice="Lars">` means a scope.\n\nHello.',
+    'Before **<swedish>hej</swedish>**, then English.\n\nDone.',
+    '| Word | Sound |\n|---|---|\n| said | /sɛd/ |\n\nDone.',
+    '<speak voice="Lars">Hej</speak>. English afterward.',
+    '<speak voice="Lars">Hej <speak voice="Elsa">världen</speak> igen</speak> English.',
+])
+def test_streaming_any_token_split_matches_complete_speech_parsing(source):
+    stream = StreamingSpeech()
+    emitted = []
+    for character in source:
+        emitted.extend(stream.feed(character))
+    emitted.extend(stream.finish())
+    assert emitted == narration_chunks(source)
+
+
+def test_streaming_malformed_final_scope_reports_error_without_speaking_tag():
+    stream = StreamingSpeech()
+    assert stream.feed('Safe paragraph.\n\n<speak voice="Lars">unfinished') == narration_chunks('Safe paragraph.')
+    with pytest.raises(ValueError, match='unclosed'):
+        stream.finish()

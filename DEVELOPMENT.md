@@ -128,6 +128,26 @@ uv run pytest tests/test_acp.py tests/test_backend.py tests/test_acp_runtime.py 
 
 ## Voice prompt conventions
 
+The default English Kokoro voice is **Fable** (`bm_fable`, British English).
+`/voice <id>` selects and saves another voice; a saved selection takes precedence
+over the built-in default on startup.
+
+Automatic voice replies consume ACP text deltas while the response is generated.
+`StreamingSpeech` retains Markdown context and releases complete paragraphs or
+closed standalone speech scopes; the unfinished tail is flushed at turn end.
+Code fences remain excluded, and `<speak>` blocks retain their voice settings
+and poem line breaks. Multipart audio acknowledgements are internal and are not
+sent to narration.
+
+Each reply owns one `NarrationStream` in the speech service. New text appends to
+the same job, allowing synthesis and playback to overlap model generation and
+each other. Live narration plays the first synthesized segment immediately;
+complete-script playback retains its existing startup buffer. One combined WAV
+and its metadata are saved for the reply. Stopping, replacing, or unloading speech
+cancels the stream and rejects later appends, so arriving model text cannot
+restart it. Model errors cancel partial narration; local speech errors do not
+abort the model turn. `/repeat` still narrates the complete last reply.
+
 For bilingual English/Swedish replies, Gemini wraps Swedish passages in
 `<speak language="sv">...</speak>`. Voice mode uses the vendored Swedish Kokoro
 voice **Klara**, then returns to your selected English voice. Swedish model

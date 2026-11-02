@@ -28,8 +28,7 @@ def unload(engine: str = "all") -> bool:
     return worker.unload(engine)
 
 
-def start(lines: list[dict], pause: float = 0.4) -> tuple[Path, float]:
-    """Queue a script with the harness service; return its path and audio estimate."""
+def _create_script(lines: list[dict], pause: float) -> tuple[Path, float]:
     def estimate_duration() -> float:
         duration = 0.0
         for index, line in enumerate(lines):
@@ -62,10 +61,43 @@ def start(lines: list[dict], pause: float = 0.4) -> tuple[Path, float]:
         )
         + "\n"
     )
+    return script, estimate
+
+
+def start(lines: list[dict], pause: float = 0.4) -> tuple[Path, float]:
+    """Queue a complete script with the harness service."""
     from agyspeak import worker
 
+    script, estimate = _create_script(lines, pause)
     worker.submit_script(script)
     return script, estimate
+
+
+class NarrationStream:
+    """One reply's append-only narration; stop/replacement rejects later chunks."""
+
+    def __init__(self) -> None:
+        from agyspeak import worker
+
+        self.path, _ = _create_script([], pause=0.0)
+        self.closed = False
+        worker.start_stream(self.path)
+
+    def append(self, lines: list[dict]) -> None:
+        from agyspeak import worker
+
+        if self.closed or not lines:
+            return
+        lines = [{**line, **validate_options({k: v for k, v in line.items() if k in SPEECH_FIELDS})} for line in lines]
+        if not worker.append_stream(self.path, lines):
+            self.closed = True
+
+    def finish(self, *, cancel: bool = False) -> None:
+        from agyspeak import worker
+
+        if not self.closed:
+            worker.finish_stream(self.path, cancel=cancel)
+            self.closed = True
 
 
 def play_lines(

@@ -466,3 +466,22 @@ def test_audio_part_failure_stops_remaining_parts(monkeypatch, tmp_path: Path):
     result = client.send('Listen.', original)
     assert len(calls) == 1
     assert 'Stopped at audio part 1/2' in result.notes[-1]
+
+
+def test_multipart_audio_only_streams_final_answer_text(monkeypatch, tmp_path):
+    from agyspeak import audio
+    from agyspeak.backend import Turn
+    clip = tmp_path / 'long.wav'
+    clip.touch()
+    monkeypatch.setattr(audio, 'prepare_for_model', lambda path: [Path('one.wav'), Path('two.wav')])
+    client = AgyClient()
+    calls = []
+    def send_part(text, part, on_event):
+        calls.append(part)
+        response = 'Received part 1/2.' if len(calls) == 1 else 'Final answer.'
+        on_event(TextDelta(response))
+        return Turn(response=response)
+    monkeypatch.setattr(client, '_send_once', send_part)
+    events = []
+    client.send('Listen', clip, events.append)
+    assert [event.text for event in events if isinstance(event, TextDelta)] == ['Final answer.']

@@ -6,7 +6,7 @@ import re
 import unicodedata
 
 from dataclasses import dataclass, replace
-from agyspeak.speech_markup import protect_tags, MARKER_PATTERN
+from agyspeak.speech_markup import protect_tags, MARKER_PATTERN, TAG_PATTERN
 
 from agyspeak.terminal_math import parsed_text_blocks
 
@@ -197,3 +197,51 @@ def narration_chunks(
 def chunks(markdown: str, limit: int = 1200) -> list[str]:
     """Return only the spoken text chunks (use narration_chunks for pacing)."""
     return [chunk.text for chunk in narration_chunks(markdown, limit)]
+
+
+class StreamingSpeech:
+    """Release complete prose/scopes while retaining Markdown parsing context.
+
+    Reparse the accumulated source at block boundaries, rather than parsing each
+    token independently: fences, tables, nested voices, and split tags still mean
+    the same thing. The unfinished tail is held until another boundary or EOF.
+    """
+
+    def __init__(self) -> None:
+        self.source = ""
+        self.boundary = 0
+        self.emitted = 0
+
+    def feed(self, text: str) -> list[SpeechChunk]:
+        self.source += text
+        candidates = [m.end() for m in re.finditer(r"\n[ \t]*\n", self.source) if m.end() > self.boundary]
+        # A standalone explicit scope may span many paragraphs. Wait for its
+        # closing tag and a little lookahead so following punctuation stays with it.
+        tail = self.source[self.boundary:].lstrip()
+        if re.match(r"<\s*(speak|swedish)\b", tail, re.I):
+            for match in TAG_PATTERN.finditer(self.source, self.boundary):
+                if not re.match(r"<\s*/", match.group()):
+                    continue
+                end = match.end()
+                while end < len(self.source) and (self.source[end].isspace() or self.source[end] in ".,!?;:…"):
+                    end += 1
+                if end < len(self.source):
+                    candidates.append(match.end())
+        for end in sorted(set(candidates), reverse=True):
+            try:
+                parsed = narration_chunks(self.source[:end])
+            except ValueError:
+                # An outer speech scope or a tag split across tokens may still
+                # be incomplete. Errors in the final source are reported at EOF.
+                continue
+            ready = parsed[self.emitted:]
+            self.emitted = len(parsed)
+            self.boundary = end
+            return ready
+        return []
+
+    def finish(self) -> list[SpeechChunk]:
+        parsed = narration_chunks(self.source)
+        ready = parsed[self.emitted:]
+        self.emitted = len(parsed)
+        return ready

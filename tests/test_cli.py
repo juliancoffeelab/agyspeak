@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from agyspeak import cli
-from agyspeak.events import AuthenticationRequired, ToolProgress
+from agyspeak.events import AuthenticationRequired, TextDelta, ToolProgress
 from agyspeak.sessions import SessionPreferences
 
 
@@ -115,7 +115,7 @@ def test_voice_mode_notifies_persistence_after_state_changes(monkeypatch) -> Non
     states = []
     monkeypatch.setattr(cli.worker, "warm", lambda voice: None)
     monkeypatch.setattr(cli.player, "unload", lambda: None)
-    monkeypatch.setattr(cli.tts, "kokoro_voices", lambda: ["af_heart", "am_echo"])
+    monkeypatch.setattr(cli.tts, "kokoro_voices", lambda: ["bm_fable", "am_echo"])
     mode = cli.VoiceMode()
     mode.on_change = lambda: states.append((mode.voice, mode.enabled))
 
@@ -124,7 +124,7 @@ def test_voice_mode_notifies_persistence_after_state_changes(monkeypatch) -> Non
     mode.toggle()
 
     assert states == [
-        ("af_heart", True),
+        ("bm_fable", True),
         ("am_echo", True),
         ("am_echo", False),
     ]
@@ -323,3 +323,66 @@ def test_invalid_effort_is_rejected_before_client_startup(monkeypatch):
     result = CliRunner().invoke(cli.app, ['--effort', 'invalid'])
     assert result.exit_code == 2
     assert 'choose low, medium, or high' in result.output
+
+
+@pytest.fixture
+def live_narration(monkeypatch):
+    class Stream:
+        closed = False
+        def __init__(self):
+            self.lines = []
+            self.finishes = []
+        def append(self, lines):
+            assert not self.closed
+            self.lines.extend(lines)
+        def finish(self, cancel=False):
+            self.finishes.append(cancel)
+            self.closed = True
+    stream = Stream()
+    monkeypatch.setattr(cli.player, 'NarrationStream', lambda: stream)
+    monkeypatch.setattr(cli.player, 'start', lambda *a, **kw: pytest.fail('must not replay the whole reply'))
+    monkeypatch.setattr(cli, '_render_turn', lambda *a: None)
+    monkeypatch.setattr(cli, '_save_session', lambda *a: None)
+    monkeypatch.setattr(cli, '_log_session', lambda *a: None)
+    return stream
+
+
+def test_live_narration_starts_during_generation_and_does_not_repeat(live_narration):
+    from agyspeak.backend import Turn
+    client = SimpleNamespace(model='test', conversation_id=None, on_permission=None)
+    source = 'First paragraph.\n\n<speak voice="Lars">Hej världen.</speak>\n\nFinal paragraph.'
+    def send(text, clip, on_event):
+        on_event(TextDelta('First paragraph.\n\n'))
+        assert [line['text'] for line in live_narration.lines] == ['First paragraph.']
+        on_event(TextDelta('<speak voice="Lars">Hej världen.</speak>\n\n'))
+        assert live_narration.lines[-1]['voice'] == 'Lars'
+        on_event(TextDelta('Final paragraph.'))
+        return Turn(response=source)
+    client.send = send
+    assert cli._send(client, 'hello', None, cli.VoiceMode(voice='af_heart', enabled=True)) == source
+    assert [line['text'] for line in live_narration.lines] == ['First paragraph.', 'Hej världen.', 'Final paragraph.']
+    assert live_narration.finishes == [False]
+
+
+def test_failed_model_turn_cancels_partial_narration(live_narration):
+    client = SimpleNamespace(model='test', conversation_id=None, on_permission=None)
+    def send(text, clip, on_event):
+        on_event(TextDelta('Partial reply.\n\n'))
+        raise KeyboardInterrupt
+    client.send = send
+    assert cli._send(client, 'hello', None, cli.VoiceMode(enabled=True)) == ''
+    assert live_narration.finishes == [True]
+
+
+def test_speech_failure_does_not_abort_model_turn(live_narration):
+    from agyspeak.backend import Turn
+    client = SimpleNamespace(model='test', conversation_id=None, on_permission=None)
+    def fail_append(lines):
+        raise RuntimeError('speech service unavailable')
+    live_narration.append = fail_append
+    def send(text, clip, on_event):
+        on_event(TextDelta('Answer.\n\n'))
+        return Turn(response='Answer.\n\n')
+    client.send = send
+    assert cli._send(client, 'hello', None, cli.VoiceMode(enabled=True)) == 'Answer.\n\n'
+    assert live_narration.finishes == [True]

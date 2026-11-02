@@ -12,6 +12,7 @@ import threading
 import tempfile
 import warnings
 from datetime import datetime
+from collections.abc import Iterable
 from pathlib import Path
 
 import numpy as np
@@ -32,7 +33,7 @@ KOKORO_RATE = 24_000
 EDGE_SILENCE_THRESHOLD = 0.001
 EDGE_SILENCE_KEEP_SECONDS = 0.04
 STREAM_START_BUFFER_SECONDS = 5.0
-DEFAULT_KOKORO_VOICE = "af_heart"
+DEFAULT_KOKORO_VOICE = "bm_fable"
 DEFAULT_SAY_VOICE = "Samantha"
 DEFAULT_SWEDISH_VOICE = "Klara"
 _swedish_models: dict[str, object] = {}
@@ -341,10 +342,11 @@ def kokoro_narrate(
 
 
 def kokoro_narrate_streaming(
-    lines: list[dict],
+    lines: Iterable[dict],
     pause: float = 0.4,
     output_path: Path | None = None,
     stop_event: threading.Event | None = None,
+    start_buffer_seconds: float = STREAM_START_BUFFER_SECONDS,
 ) -> Path:
     """Like kokoro_narrate, but start playing line 1 while the rest render.
 
@@ -366,19 +368,21 @@ def kokoro_narrate_streaming(
     def render_all() -> None:
         try:
             _limit_render_threads()
+            rendered = False
             for i, line in enumerate(lines):
                 if stop_event and stop_event.is_set():
                     raise SpeechCancelled("speech cancelled")
                 audio = _render_or_warn(line)
                 if audio is None:
                     continue
-                if i < len(lines) - 1:
-                    seconds = pause_before(lines[i + 1], pause)
+                if rendered:
+                    seconds = pause_before(line, pause)
                     gap = np.zeros(int(KOKORO_RATE * seconds), dtype=np.float32)
-                    audio = np.concatenate([audio, gap])
+                    audio = np.concatenate([gap, audio])
                 part = SPEECH_DIR / f"seg_{stamp}_{i:03d}.wav"
                 sf.write(part, audio, KOKORO_RATE, subtype="PCM_16")
                 ready.put((audio, part))
+                rendered = True
         except Exception as exc:  # surface to the player loop
             ready.put(exc)
         finally:
@@ -394,7 +398,7 @@ def kokoro_narrate_streaming(
         # A heading can be much shorter than the segment rendered behind it.
         # Hold a few seconds of ready audio before starting, then let rendering
         # continue concurrently with playback.
-        while buffered_seconds < STREAM_START_BUFFER_SECONDS:
+        while buffered_seconds < start_buffer_seconds:
             item = ready.get()
             if item is None:
                 finished = True

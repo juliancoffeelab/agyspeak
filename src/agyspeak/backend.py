@@ -292,7 +292,13 @@ class AgyClient:
                     f"This is the final part {index}/{len(parts)} of the recording. "
                     "Listen, then answer the user's request using all parts in order:\n" + request
                 )
-            turn = self._send_once(prompt, part, on_event)
+            callback = on_event
+            if index < len(parts) and on_event:
+                # Multipart acknowledgements are internal, not narration text.
+                def callback(event: ChatEvent) -> None:
+                    if not isinstance(event, TextDelta):
+                        on_event(event)
+            turn = self._send_once(prompt, part, callback)
             if index < len(parts) and turn.response.strip() != acknowledgment:
                 turn.notes.append(f"Stopped at audio part {index}/{len(parts)}: no acknowledgment received.")
                 break

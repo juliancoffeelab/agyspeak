@@ -28,7 +28,7 @@ from agyspeak import player, tts, worker
 from agyspeak.backend import DEFAULT_MODEL, AgyClient, AgyNotFound, Turn
 from agyspeak.events import AudioPart, AuthenticationRequired, ChatEvent, TextDelta, ToolProgress
 from agyspeak.sessions import EFFORT_LEVELS, SessionPreferences, write_last_session
-from agyspeak.speech_text import narration_chunks
+from agyspeak.speech_text import SpeechChunk, StreamingSpeech, narration_chunks
 from agyspeak.terminal_math import TerminalMarkdown
 
 app = typer.Typer(add_completion=False, rich_markup_mode="rich")
@@ -108,24 +108,71 @@ class VoiceMode:
         if not self.enabled:
             return None
         try:
-            lines = [
-                {
-                    "text": chunk.text,
-                    "voice": chunk.voice or (tts.DEFAULT_SWEDISH_VOICE if chunk.language == "sv" else self.voice),
-                    "language": chunk.language,
-                    "engine": chunk.engine or "auto",
-                    "speed": chunk.speed if chunk.speed is not None else VOICE_MODE_SPEED,
-                    "instruct": chunk.instruct,
-                    "pause_before": chunk.pause_before,
-                }
-                for chunk in narration_chunks(markdown)
-            ]
+            lines = self.speech_lines(narration_chunks(markdown))
             if not lines:
                 return None
             player.start(lines, pause=0.0)
         except Exception as exc:
             return f"[yellow]could not narrate reply:[/yellow] {exc}"
         return None
+
+    def speech_lines(self, chunks: list[SpeechChunk]) -> list[dict]:
+        return [
+            {
+                "text": chunk.text,
+                "voice": chunk.voice or (tts.DEFAULT_SWEDISH_VOICE if chunk.language == "sv" else self.voice),
+                "language": chunk.language,
+                "engine": chunk.engine or "auto",
+                "speed": chunk.speed if chunk.speed is not None else VOICE_MODE_SPEED,
+                "instruct": chunk.instruct,
+                "pause_before": chunk.pause_before,
+            }
+            for chunk in chunks
+        ]
+
+
+class ReplyNarration:
+    """Feed one model turn to speech without replaying its completed prefix."""
+
+    def __init__(self, mode: VoiceMode):
+        self.mode = mode
+        self.buffer = StreamingSpeech()
+        self.stream: player.NarrationStream | None = None
+        self.error: str | None = None
+        if mode.enabled:
+            try:
+                self.stream = player.NarrationStream()
+            except Exception as exc:
+                self.error = str(exc)
+
+    def feed(self, text: str) -> None:
+        if self.stream and not self.stream.closed and not self.error:
+            try:
+                self.stream.append(self.mode.speech_lines(self.buffer.feed(text)))
+            except Exception as exc:
+                self.error = str(exc)
+                self.cancel()
+
+    def finish(self, response: str) -> str | None:
+        if self.stream and not self.stream.closed and not self.error:
+            try:
+                if not self.buffer.source:
+                    self.feed(response)
+                self.stream.append(self.mode.speech_lines(self.buffer.finish()))
+                self.stream.finish()
+            except Exception as exc:
+                self.error = str(exc)
+                self.cancel()
+        if self.error:
+            return f"[yellow]could not narrate reply:[/yellow] {self.error}"
+        return None
+
+    def cancel(self) -> None:
+        if self.stream:
+            try:
+                self.stream.finish(cancel=True)
+            except Exception:
+                pass
 
 
 def _speech_command(arguments: str, voice: str) -> str:
@@ -387,6 +434,7 @@ def _send(client: AgyClient, text: str, clip: Path | None, voice_mode: VoiceMode
     label = "voice" if clip else "text"
     is_first = client.conversation_id is None
     shown_tools: set[str] = set()
+    narration = ReplyNarration(voice_mode)
     with console.status(f"[bold blue]thinking[/bold blue] [dim]({label})[/dim]") as status:
 
         def on_event(event: ChatEvent) -> None:
@@ -405,6 +453,7 @@ def _send(client: AgyClient, text: str, clip: Path | None, voice_mode: VoiceMode
                     shown_tools.add(key)
             elif isinstance(event, TextDelta):
                 status.update("[bold blue]responding[/bold blue]")
+                narration.feed(event.text)
 
         def permission(call: ToolProgress) -> bool:
             status.stop()
@@ -421,15 +470,18 @@ def _send(client: AgyClient, text: str, clip: Path | None, voice_mode: VoiceMode
         try:
             turn = client.send(text, clip, on_event=on_event)
         except (RuntimeError, ValueError, OSError) as exc:
+            narration.cancel()
             console.print(Text(f"Antigravity: {exc}", style="red"))
             return ""
         except KeyboardInterrupt:
+            narration.cancel()
             console.print("[dim]turn interrupted[/dim]")
             return ""
         finally:
             client.on_permission = previous_permission
+    speech_error = narration.finish(turn.response)
     _render_turn(turn, client.model)
-    if speech_error := voice_mode.narrate(turn.response):
+    if speech_error:
         console.print(speech_error)
     _save_session(client, voice_mode, turn.response)
     if is_first:
