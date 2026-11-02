@@ -6,7 +6,9 @@ import {
 import { LegendList, type LegendListRef } from '@legendapp/list/react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import type { ChatHistory } from './history';
+import { AudioComposer } from './AudioComposer';
+import type { ModelSettings } from './openRouter';
+import type { AudioInput, ChatHistory } from './history';
 import { ChatHeader } from './ChatHeader';
 import type { ChatColors } from './theme';
 import { screenStyles } from './screenStyles';
@@ -19,6 +21,8 @@ type ChatScreenProps = {
   error: string | null;
   pending: PendingReply | null;
   connected: boolean;
+  settings: ModelSettings;
+  onSendAudio: (audio: AudioInput, settings: ModelSettings) => Promise<boolean>;
   onStop: () => void;
   onRetryReply: (id: number) => void;
   onOpenSettings: () => void;
@@ -30,7 +34,8 @@ type ChatScreenProps = {
   onRetry: () => void;
 };
 
-export function ChatScreen({ colors, history, busy, error, pending, connected, onStop, onRetryReply, onOpenSettings, draft, onDraftChange, onSend, onNewChat, onOpenHistory, onRetry }: ChatScreenProps) {
+export function ChatScreen({ colors, history, busy, error, pending, connected, onStop, onRetryReply, onOpenSettings, draft, onDraftChange, onSend, onNewChat, onOpenHistory, onRetry, settings, onSendAudio }: ChatScreenProps) {
+  const [audioMode, setAudioMode] = useState(false);
   const [scrollRequest, setScrollRequest] = useState(0);
   const canSend = history !== null && connected && !pending && !busy && draft.trim().length > 0;
 
@@ -64,7 +69,17 @@ export function ChatScreen({ colors, history, busy, error, pending, connected, o
           <Text style={[styles.actionText, { color: colors.text }]}>Connect OpenRouter</Text>
         </Pressable>}
         {pending !== null && pending.chatId !== history?.activeId && <Text style={[styles.error, { color: colors.muted }]}>Replying in another chat. You can stop it here.</Text>}
+        <Pressable accessibilityRole="button" accessibilityLabel={audioMode ? 'Switch to text' : 'Switch to voice'} disabled={busy || pending !== null}
+          onPress={() => setAudioMode(value => !value)} style={styles.retry}>
+          <Text style={[styles.actionText, { color: colors.muted }]}>{audioMode ? 'Keyboard' : 'Voice message'}</Text>
+        </Pressable>
         <View style={[styles.composer, { borderTopColor: colors.line }]}>
+          {audioMode && pending === null ? <AudioComposer key={history?.activeId ?? 'new'} colors={colors} disabled={!history || !connected || busy}
+            settings={settings} onSend={async (audio, chosen) => {
+              const sent = await onSendAudio(audio, chosen);
+              if (sent) setScrollRequest(value => value + 1);
+              return sent;
+            }} /> : <>
           <View style={[styles.inputFrame, { borderColor: colors.line }]}>
             <TextInput
               accessibilityLabel="Message"
@@ -88,6 +103,7 @@ export function ChatScreen({ colors, history, busy, error, pending, connected, o
           >
             <Text style={[styles.sendText, { color: colors.buttonText }]}>{pending ? 'Stop' : 'Send'}</Text>
           </Pressable>
+          </>}
         </View>
       </SafeAreaView>
     </KeyboardAvoidingView>
@@ -133,7 +149,7 @@ function MessageList({ colors, history, scrollRequest, onRetryReply, busy }: Pic
           <Text style={[styles.author, { color: colors.muted }]}>{item.role === 'user' ? 'You' : 'AGSpeak'}</Text>
           <View style={item.role === 'user' && [styles.bubble, { backgroundColor: colors.bubble }]}>
             <Text selectable style={[styles.messageText, { color: colors.text }]}>
-              {item.status === 'pending' ? 'Thinking…' : item.text || (item.status === 'cancelled' ? 'Reply stopped.' : 'Reply failed.')}
+              {item.status === 'pending' ? 'Thinking…' : item.audio ? 'Voice message'  : item.text || (item.status === 'cancelled' ? 'Reply stopped.' : 'Reply failed.')}
             </Text>
             {(item.status === 'failed' || item.status === 'cancelled') && (
               <View>

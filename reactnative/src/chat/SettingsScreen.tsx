@@ -57,8 +57,11 @@ export function SettingsScreen({ colors, initial, onSave, onClose }: SettingsScr
                 <Text style={[styles.label, { color: colors.text }]}>Model</Text>
                 <TextInput accessibilityLabel="OpenRouter model" value={model} onChangeText={setModel} autoCapitalize="none" autoCorrect={false}
                   underlineColorAndroid="transparent" style={[styles.input, { color: colors.text, borderColor: colors.line }]} />
+                <Pressable accessibilityRole="button" onPress={() => setModel('google/gemini-3.8-flash')} style={styles.action}>
+                  <Text style={{ color: colors.text }}>Use Gemini 3.8 Flash</Text>
+                </Pressable>
                 <Pressable accessibilityRole="button" onPress={() => setModel('openrouter/free')} style={styles.action}><Text style={{ color: colors.text }}>Use free router</Text></Pressable>
-                <Text style={[styles.hint, { color: colors.muted }]}>The free router selects an available free model. Other models may use your OpenRouter credits. Requests send recent conversation text, with replies limited to 512 tokens.</Text>
+                <Text style={[styles.hint, { color: colors.muted }]}>Gemini 3.8 Flash currently costs $0.825/M input tokens and $4.125/M output tokens. The free router selects an available free model. Voice messages use Gemini Flash and send audio for transcription and a reply. Text replies are limited to 512 tokens; voice transcripts and replies share 1,024 tokens.</Text>
                 {error !== null && <Text accessibilityRole="alert" style={[styles.hint, { color: colors.text }]}>{error}</Text>}
                 <Pressable accessibilityRole="button" disabled={saving} onPress={() => { void save(); }} style={[styles.save, { backgroundColor: colors.button, opacity: saving ? 0.5 : 1 }]}>
                   <Text style={{ color: colors.buttonText, fontWeight: '600' }}>{saving ? 'Saving…' : 'Save'}</Text>

@@ -201,10 +201,27 @@ load the updated Gemini prompt.
 
 ## Android foundation
 
-The independent Expo/React Native app lives in `reactnative/`. Its current screen
-is a minimal placeholder. It has no connection to the Python application or a
-model provider. The native audio, file-storage, and secure-storage dependencies
-are available for subsequent UI work.
+The independent Expo/React Native app lives in `reactnative/`. It uses OpenRouter directly, with
+API keys in device secure storage and conversations in SQLite. It is independent
+of the Python application's ACP runtime.
+
+Tap **Voice message**, then **Record** to start and **Send recording** to stop
+and send. **Discard** cancels without a request. Recording stops at 120 seconds;
+backgrounding the app stops capture and keeps the clip ready to send manually.
+**Send audio file** opens Android's file picker, which also supports quiet ADB
+fixture testing: push a clip to `/sdcard/Download/`, then select it in the app.
+Audio files must be under 8 MB. Voice turns always use
+`google/gemini-3.8-flash`, independently of the text model selected in Settings.
+One native audio request returns a transcript in the original language and a text
+reply. There is no automatic spoken playback.
+
+Pending, failed, and stopped voice turns retain audio in SQLite for explicit
+retry, including after restart. Successful turns atomically replace the audio
+with its transcript and save the reply. Only the latest voice attachment is sent;
+completed voice turns use transcript text in subsequent context. Deleting a chat
+also removes its retained audio. Replies use low reasoning effort and share a
+1,024-token limit with the transcript; text-only turns retain the 512-token limit.
+No inference runs as part of `pnpm check`.
 
 From `reactnative/`, run `pnpm install` and `pnpm check`. `pnpm android` builds
 and launches the development app; `pnpm android:release --no-bundler` builds and

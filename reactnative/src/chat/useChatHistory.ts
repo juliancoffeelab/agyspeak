@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { randomUUID } from 'expo-crypto';
 
 import { ChatController, type ChatState } from './ChatController';
-import { HistoryStore } from './history';
+import { HistoryStore, type AudioInput } from './history';
 import { completeReply, type ModelSettings } from './openRouter';
 
 export function useChatHistory() {
@@ -52,6 +52,7 @@ export function useChatHistory() {
     error: openError ?? state?.error ?? null,
     retry: () => { setOpenError(null); setAttempt(value => value + 1); },
     send: (text: string, settings: ModelSettings) => controllerRef.current?.send(text, settings) ?? Promise.resolve(false),
+    sendAudio: (audio: AudioInput, settings: ModelSettings) => controllerRef.current?.sendAudio(audio, settings) ?? Promise.resolve(false),
     retryReply: (id: number, settings: ModelSettings) => controllerRef.current?.retryReply(id, settings) ?? Promise.resolve(false),
     stop: () => controllerRef.current?.stop() ?? Promise.resolve(),
     select: (id: string | null) => controllerRef.current?.select(id) ?? Promise.resolve(false),

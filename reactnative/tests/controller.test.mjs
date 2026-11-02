@@ -135,3 +135,31 @@ test('disposing during the initial save cannot start a late model request', asyn
     assert.equal((await store.read()).messages.at(-1).status, 'failed');
   } finally { sqlite.close(); }
 });
+
+test('voice audio survives interruption and retry; transcript and reply replace it atomically', async () => {
+  const audio = { data: 'UklGRg==', format: 'm4a' };
+  let calls = 0;
+  const { controller, store, sqlite } = await setup(async (messages, selected) => {
+    calls++;
+    assert.equal(selected.model, 'google/gemini-3.8-flash');
+    assert.deepEqual(messages[0].audio, audio);
+    if (calls === 1) throw new Error('Offline');
+    return { text: 'Hej!', transcript: 'Hej där!', model: selected.model, cost: 0 };
+  });
+  try {
+    assert.equal(await controller.sendAudio(audio, settings), true);
+    await waitFor(controller, s => !s.pending);
+    await store.initialize();
+    let saved = await store.read();
+    assert.deepEqual(saved.messages[0].audio, audio);
+    const ids = saved.messages.map(m => m.id);
+    await controller.retryReply(ids[1], settings);
+    await waitFor(controller, s => !s.pending);
+    saved = await store.read();
+    assert.deepEqual(saved.messages.map(m => m.id), ids);
+    assert.equal(saved.messages[0].text, 'Hej där!');
+    assert.equal(saved.messages[0].audio, undefined);
+    assert.equal(saved.chats[0].title, 'Hej där!');
+    assert.equal(saved.messages[1].text, 'Hej!');
+  } finally { await controller.dispose(); sqlite.close(); }
+});

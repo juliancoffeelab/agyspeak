@@ -77,3 +77,28 @@ test('429 errors distinguish upstream provider limits from unspecified rate limi
   }, { status: 429 })), /model provider is rate limited/);
   await assert.rejects(completeReply([user], settings, signal(), async () => new Response('', { status: 429 })), /request was rate limited/);
 });
+
+test('audio uses Gemini, sends native audio, and parses transcript plus answer in one request', async () => {
+  const audio = { data: 'UklGRg==', format: 'm4a' };
+  const result = await completeReply([{ ...user, text: 'Voice message', audio }], settings, signal(), async (_url, options) => {
+    const body = JSON.parse(options.body);
+    assert.equal(body.model, 'google/gemini-3.8-flash');
+    assert.deepEqual(body.messages[0].content[1], { type: 'input_audio', input_audio: audio });
+    assert.equal(body.response_format.json_schema.strict, true);
+    assert.deepEqual(body.reasoning, { effort: 'low' });
+    return Response.json({ choices: [{ message: { content: JSON.stringify({ transcript: 'Hej där!', reply: 'Hej!' }) } }], usage: { cost: 0.001 } });
+  });
+  assert.equal(result.transcript, 'Hej där!');
+  assert.equal(result.text, 'Hej!');
+  assert.equal(result.cost, 0.001);
+});
+
+test('invalid audio and malformed voice replies cannot silently become a completed turn', async () => {
+  const voice = { ...user, audio: { data: 'UklGRg==', format: 'wav' } };
+  await assert.rejects(completeReply([{ ...voice, audio: { data: '', format: 'exe' } }], settings, signal(), async () => {
+    assert.fail('invalid audio must never reach the network');
+  }));
+  for (const content of ['not json', '{"transcript":"","reply":"Hi"}', '{"transcript":"Hello"}']) {
+    await assert.rejects(completeReply([voice], settings, signal(), async () => Response.json({ choices: [{ message: { content } }] })));
+  }
+});

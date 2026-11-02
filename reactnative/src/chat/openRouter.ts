@@ -1,7 +1,16 @@
-import type { Message } from './history';
+import type { AudioInput, Message } from './history';
+
+export const AUDIO_MODEL = 'google/gemini-3.8-flash';
+export const MAX_AUDIO_BYTES = 8 * 1024 * 1024;
+export const AUDIO_FORMATS = ['m4a', 'mp3', 'wav', 'aac', 'ogg', 'flac', 'aiff', 'webm'];
+
+export function validateAudio(audio: AudioInput) {
+  if (!AUDIO_FORMATS.includes(audio.format)) throw new Error('Choose an M4A, MP3, WAV, AAC, OGG, FLAC, AIFF, or WebM audio file.');
+  if (!audio.data || audio.data.length > Math.ceil(MAX_AUDIO_BYTES / 3) * 4) throw new Error('Audio must be nonempty and under 8 MB.');
+}
 
 export type ModelSettings = { apiKey: string; model: string };
-export type Completion = { text: string; model: string; cost: number | null };
+export type Completion = { text: string; model: string; cost: number | null; transcript?: string };
 export type ReplyFunction = (messages: Message[], settings: ModelSettings, signal: AbortSignal) => Promise<Completion>;
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -10,13 +19,17 @@ function record(value: unknown): value is Record<string, unknown> {
 
 // Bound what we send, independently of how much history is loaded for reading.
 export function requestMessages(messages: Message[]) {
-  const result: { role: 'user' | 'assistant'; content: string }[] = [];
+  const result: { role: 'user' | 'assistant'; content: string | ({ type: 'text'; text: string } | { type: 'input_audio'; input_audio: AudioInput })[] }[] = [];
+  const lastUser = messages.findLast(message => message.role === 'user');
   let remaining = 24_000;
   for (const message of [...messages].reverse()) {
     if (message.role === 'assistant' && message.status !== 'complete') continue;
     if (!message.text) continue;
     if (message.text.length > remaining) break;
-    result.unshift({ role: message.role, content: message.text });
+    if (message.audio && message === lastUser) {
+      validateAudio(message.audio);
+      result.unshift({ role: 'user', content: [{ type: 'text', text: 'Listen to this voice message, transcribe it in its original language, and answer it.' }, { type: 'input_audio', input_audio: message.audio }] });
+    } else if (!message.audio) result.unshift({ role: message.role, content: message.text });
     remaining -= message.text.length;
   }
   return result;
@@ -52,6 +65,7 @@ function providerError(status: number, body: unknown, apiKey: string) {
 export async function completeReply(
   messages: Message[], settings: ModelSettings, signal: AbortSignal, fetcher: typeof fetch = fetch,
 ): Promise<Completion> {
+  const audioTurn = Boolean(messages.findLast(message => message.role === 'user')?.audio);
   const controller = new AbortController();
   const abort = () => controller.abort();
   signal.addEventListener('abort', abort, { once: true });
@@ -63,11 +77,12 @@ export async function completeReply(
       headers: { Authorization: `Bearer ${settings.apiKey}`, 'Content-Type': 'application/json', 'X-OpenRouter-Title': 'AGSpeak' },
       signal: controller.signal,
       body: JSON.stringify({
-        model: settings.model,
+        model: audioTurn ? AUDIO_MODEL : settings.model,
+        ...(audioTurn ? { response_format: { type: 'json_schema', json_schema: { name: 'voice_reply', strict: true, schema: { type: 'object', properties: { transcript: { type: 'string' }, reply: { type: 'string' } }, required: ['transcript', 'reply'], additionalProperties: false } } } } : {}),
         messages: requestMessages(messages),
-        max_tokens: 512,
+        max_tokens: audioTurn ? 1024 : 512,
         stream: false,
-        reasoning: { enabled: false },
+        reasoning: audioTurn || settings.model === AUDIO_MODEL ? { effort: 'low' } : { enabled: false },
       }),
     });
     if (!response.ok) {
@@ -83,7 +98,18 @@ export async function completeReply(
       throw new Error('The model returned no text. You can retry or choose another model.');
     }
     const cost = record(data.usage) && typeof data.usage.cost === 'number' ? data.usage.cost : null;
-    return { text: message.content, model: typeof data.model === 'string' ? data.model : settings.model, cost };
+    let text = message.content;
+    let transcript: string | undefined;
+    if (audioTurn) {
+      let parsed: unknown;
+      try { parsed = JSON.parse(text); } catch { throw new Error('Gemini returned an invalid voice reply. You can retry it.'); }
+      if (!record(parsed) || typeof parsed.transcript !== 'string' || !parsed.transcript.trim() || typeof parsed.reply !== 'string' || !parsed.reply.trim()) {
+        throw new Error('No speech or reply was recognized. Try a clearer recording.');
+      }
+      text = parsed.reply.trim();
+      transcript = parsed.transcript.trim();
+    }
+    return { text, ...(transcript === undefined ? {} : { transcript }), model: typeof data.model === 'string' ? data.model : audioTurn ? AUDIO_MODEL : settings.model, cost };
   } catch (cause) {
     if (controller.signal.aborted && !signal.aborted) throw new Error('The request timed out. You can retry it.', { cause });
     if (cause instanceof Error && cause.message.startsWith('Network request failed')) throw new Error('Couldn’t reach OpenRouter. Check your connection and retry.', { cause });

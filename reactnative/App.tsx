@@ -14,7 +14,7 @@ import { SettingsScreen } from './src/chat/SettingsScreen';
 export default function App() {
   const dark = useColorScheme() === 'dark';
   const colors = palettes[dark ? 'dark' : 'light'];
-  const { history, busy, pending, error, retry, send, retryReply, stop, select, remove } = useChatHistory();
+  const { history, busy, pending, error, retry, send, sendAudio, retryReply, stop, select, remove } = useChatHistory();
   const model = useModelSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -52,6 +52,8 @@ export default function App() {
         error={error ?? model.error}
         pending={pending}
         connected={model.ready && Boolean(model.settings.apiKey)}
+        settings={model.settings}
+        onSendAudio={sendAudio}
         onStop={() => { void stop(); }}
         onRetryReply={id => { void retryReply(id, model.settings); }}
         onOpenSettings={() => setSettingsOpen(true)}

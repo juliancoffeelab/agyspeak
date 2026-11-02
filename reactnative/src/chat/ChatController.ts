@@ -1,5 +1,5 @@
-import type { ChatHistory, HistoryStore } from './history';
-import type { ModelSettings, ReplyFunction } from './openRouter';
+import type { AudioInput, ChatHistory, HistoryStore } from './history';
+import { AUDIO_MODEL, validateAudio, type ModelSettings, type ReplyFunction } from './openRouter.ts';
 
 export type PendingReply = { chatId: string; messageId: number };
 export type ChatState = { history: ChatHistory; saving: boolean; pending: PendingReply | null; error: string | null };
@@ -79,7 +79,17 @@ export class ChatController {
     return this.start(settings, () => this.store.beginReply(id, trimmed, settings.model, Date.now()));
   }
 
+  sendAudio(audio: AudioInput, settings: ModelSettings) {
+    try { validateAudio(audio); } catch (cause) {
+      this.publish({ error: cause instanceof Error ? cause.message : 'Invalid audio.' });
+      return Promise.resolve(false);
+    }
+    const id = this.state.history.activeId ?? this.createId();
+    return this.start({ ...settings, model: AUDIO_MODEL }, () => this.store.beginReply(id, 'Voice message', AUDIO_MODEL, Date.now(), audio));
+  }
+
   retryReply(id: number, settings: ModelSettings) {
+    if (this.state.history.messages.findLast(message => message.role === 'user')?.audio) settings = { ...settings, model: AUDIO_MODEL };
     return this.start(settings, () => this.store.retryReply(id, settings.model, Date.now()));
   }
 
@@ -87,7 +97,7 @@ export class ChatController {
     try {
       const completion = await this.reply(history.messages, settings, run.abort.signal);
       if (this.active !== run || run.abort.signal.aborted) return;
-      const saved = await this.write(() => this.store.finishReply(run.messageId, 'complete', completion.text, null, completion.model));
+      const saved = await this.write(() => this.store.finishReply(run.messageId, 'complete', completion.text, null, completion.model, completion.transcript));
       if (this.active !== run) return;
       this.active = null;
       this.publish({ history: saved, pending: null });

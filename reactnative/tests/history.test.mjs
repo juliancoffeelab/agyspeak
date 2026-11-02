@@ -67,7 +67,7 @@ test('future database versions are rejected without resetting data', async () =>
   try {
     await store.initialize();
     await appendTurn(store, 'existing', 'Keep me', 'Original', 1);
-    sqlite.exec('PRAGMA user_version = 3');
+    sqlite.exec('PRAGMA user_version = 4');
     await assert.rejects(store.initialize(), /Unsupported/);
     assert.equal((await store.read()).messages.length, 2);
   } finally { sqlite.close(); }
@@ -110,5 +110,28 @@ test('schema migration keeps v1 messages and recovers interrupted pending replie
     saved = await store.read();
     assert.equal(saved.messages.at(-1).status, 'failed');
     assert.match(saved.messages.at(-1).error, /app closed/);
+  } finally { sqlite.close(); }
+});
+
+test('v2 history migrates without losing messages; audio completion rolls back as one unit', async () => {
+  const { store, sqlite, failRead } = connect();
+  try {
+    await store.initialize();
+    await appendTurn(store, 'old', 'Keep this chat', 'Kept', 1);
+    sqlite.exec('ALTER TABLE messages DROP COLUMN audio_data; ALTER TABLE messages DROP COLUMN audio_format; PRAGMA user_version=2;');
+    await store.initialize();
+    assert.equal((await store.read()).messages[0].text, 'Keep this chat');
+    const audio = { data: 'UklGRg==', format: 'wav' };
+    const pending = await store.beginReply('voice', 'Voice message', 'google/gemini-3.8-flash', 2, audio);
+    const id = pending.messages.at(-1).id;
+    failRead();
+    await assert.rejects(store.finishReply(id, 'complete', 'Hello', null, null, 'Hi there'), /snapshot/);
+    let saved = await store.read();
+    assert.deepEqual(saved.messages[0].audio, audio);
+    assert.equal(saved.messages[1].status, 'pending');
+    saved = await store.finishReply(id, 'complete', 'Hello', null, null, 'Hi there');
+    assert.equal(saved.messages[0].audio, undefined);
+    assert.equal(saved.messages[0].text, 'Hi there');
+    assert.equal(saved.messages[1].status, 'complete');
   } finally { sqlite.close(); }
 });
