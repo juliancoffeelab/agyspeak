@@ -96,7 +96,7 @@ export function AudioComposer({ colors, visible, disabled, pending, onSendText, 
 const styles = StyleSheet.create({
   container: { paddingHorizontal: 12, paddingTop: 8, paddingBottom: 10 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 2, borderWidth: 1, borderRadius: 26, padding: 4 },
-  input: { flex: 1, minHeight: 44, maxHeight: 160, paddingHorizontal: 6, paddingVertical: 10, fontSize: 16, lineHeight: 24 },
+  input: { flex: 1, minHeight: 44, maxHeight: 164, paddingHorizontal: 6, paddingVertical: 10, fontSize: 16 },
   hiddenInput: { display: 'none' },
   recording: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 48 },
   wave: { flex: 1, minWidth: 0 },

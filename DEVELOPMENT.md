@@ -267,7 +267,9 @@ on both platforms. These metadata requests do not submit inference.
 
 The composer owns its draft locally. Its uncontrolled native `TextInput` reports
 edits into a ref; React state only tracks whether there is sendable text. Typing
-does not update `App` or the message list. The input stays mounted during audio
+does not update `App` or the message list. The input uses native font line
+metrics instead of an explicit line height, keeping growing-field measurement
+aligned with the Android editor. The input stays mounted during audio
 capture, preserving draft text and native selection. Submitting clears it immediately; a failed save restores the original draft
 only when no edits arrived in the meantime. Explicit chat navigation resets the
 composer; creating the first saved turn does not remount it. Composer controls
