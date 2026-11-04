@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { fetch as streamingFetch } from "expo/fetch";
+import { AppState } from "react-native";
 import { randomUUID } from "expo-crypto";
 
 import { ChatController, type ChatState } from "./ChatController";
@@ -13,6 +15,7 @@ export function useChatHistory() {
 
   useEffect(() => {
     let mounted = true;
+    let appStateSubscription: { remove: () => void } | undefined;
     let unsubscribe: (() => void) | undefined;
     const opening = (async () => {
       const { openDatabaseAsync } = await import("expo-sqlite");
@@ -22,14 +25,24 @@ export function useChatHistory() {
       try {
         const store = new HistoryStore(db);
         await store.initialize();
+        const history = await store.read();
+        const initialDraft = await store.readDraft(history.activeId);
         const controller = new ChatController(
           store,
-          await store.read(),
-          completeReply,
+          history,
+          (messages, settings, signal, onText) =>
+            completeReply(messages, settings, signal, onText, streamingFetch),
           randomUUID,
+          initialDraft,
         );
         if (mounted) {
           controllerRef.current = controller;
+          appStateSubscription = AppState.addEventListener(
+            "change",
+            (status) => {
+              if (status !== "active") void controller.flushDraft();
+            },
+          );
           setState(controller.getSnapshot());
           setOpenError(null);
           unsubscribe = controller.subscribe(() =>
@@ -50,6 +63,7 @@ export function useChatHistory() {
     return () => {
       mounted = false;
       unsubscribe?.();
+      appStateSubscription?.remove();
       controllerRef.current = null;
       void opening
         .then(async ({ controller, db }) => {
@@ -62,6 +76,9 @@ export function useChatHistory() {
 
   return {
     history: state?.history ?? null,
+    draft: state?.draft ?? null,
+    flushDraft: () =>
+      controllerRef.current?.flushDraft() ?? Promise.resolve(false),
     busy: state?.saving ?? false,
     pending: state?.pending ?? null,
     error: openError ?? state?.error ?? null,

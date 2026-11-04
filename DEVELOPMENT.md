@@ -265,14 +265,24 @@ modal drops the bottom safe-area inset while typing
 so its scroll viewport meets the keyboard. Keyboard avoidance remains explicit
 on both platforms. These metadata requests do not submit inference.
 
-The composer owns its draft locally. Its uncontrolled native `TextInput` reports
-edits into a ref; React state only tracks whether there is sendable text. Typing
+Each chat has a text draft in SQLite, plus one slot for an unfinished new chat.
+`PersistentDraft` keeps the live input value and a 400 ms save timer; ordinary
+edits do not publish chat snapshots. History/settings navigation and app
+backgrounding flush pending writes. Chat selection reads the target draft
+before mounting its composer, so asynchronous hydration cannot overwrite typing.
+Schema v6 adds draft storage without changing saved conversations.
+
+The composer uses an uncontrolled native `TextInput`; React state only tracks
+whether there is sendable text. Typing
 does not update `App` or the message list. The input uses native font line
 metrics instead of an explicit line height, keeping growing-field measurement
 aligned with the Android editor. The input stays mounted during audio
 capture, preserving draft text and native selection. Submitting clears it immediately; a failed save restores the original draft
-only when no edits arrived in the meantime. Explicit chat navigation resets the
-composer; creating the first saved turn does not remount it. Composer controls
+only when no edits arrived in the meantime. The sent draft is consumed in the
+same transaction as the user message; failed transactions preserve it, and text
+typed during the save becomes the next draft. Audio sends preserve the text
+draft. Explicit chat navigation mounts the corresponding saved draft; creating
+the first saved turn transfers its draft slot without remounting the composer. Composer controls
 use Lucide icons inside a shared rounded surface. Keyboard avoidance is explicit on both
 platforms. The bottom safe-area inset is omitted while the keyboard is visible,
 so navigation-bar padding does not become a gap above the keyboard.
@@ -303,13 +313,24 @@ are amplitude levels, not a frequency spectrogram. There is no automatic
 transcription or spoken playback. Existing transcripts from older versions remain
 as text because their original recordings were already removed.
 
+Replies stream from OpenRouter's Chat Completions endpoint using SSE and
+Expo's cross-platform streaming fetch. A per-reply `StreamingText` external store
+coalesces text updates every 40 ms; only the reply bubble subscribes, so chunks
+do not publish the whole chat state or write SQLite. Completion writes the final
+reply once. Stop aborts the connection and preserves received text; errors retain
+partial text with the failed status. Retries use a new stream and reject late
+chunks from previous attempts. Partial failed/cancelled replies stay out of model
+context. In-flight chunks are kept in memory until the turn ends. Stream framing
+handles comments, split UTF-8, final usage, and truncated or failed streams with
+no automatic retries. Offline checks use fake streams and never call a model.
+
 Every request uses the selected model, including voice turns and text follow-ups
 with audio context. Unsupported audio input is reported as a provider error; no
 model is silently substituted. Gemini Flash uses low thinking effort. Requests
 with audio context have a 1,024-token reply limit.
 Context is bounded to recent history with 24,000 text characters and 12 MB of
 encoded audio data (before base64 expansion). Text-only requests keep their
-512-token limit. Deleting a chat removes its recordings and capture metadata.
+512-token limit. Deleting a chat removes its recordings, capture metadata, and text draft.
 No inference runs as part of `pnpm check`.
 
 From `reactnative/`, run `pnpm install` and `pnpm check`. `pnpm android` builds

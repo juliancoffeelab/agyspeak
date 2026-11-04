@@ -55,7 +55,7 @@ export class HistoryStore {
         "PRAGMA user_version",
       );
       let version = row?.user_version ?? 0;
-      if (version > 5) throw new Error("Unsupported history database version");
+      if (version > 6) throw new Error("Unsupported history database version");
       if (version === 0) {
         await tx.execAsync(`
           CREATE TABLE chats (id TEXT PRIMARY KEY NOT NULL, title TEXT NOT NULL, updated_at INTEGER NOT NULL);
@@ -97,6 +97,11 @@ export class HistoryStore {
       if (version <= 4)
         await tx.execAsync(`ALTER TABLE messages ADD COLUMN audio_length INTEGER;
         UPDATE messages SET audio_length = LENGTH(audio_data) WHERE audio_data IS NOT NULL; PRAGMA user_version = 5;`);
+      if (version <= 5)
+        await tx.execAsync(`
+        CREATE TABLE drafts (chat_key TEXT PRIMARY KEY NOT NULL, text TEXT NOT NULL);
+        PRAGMA user_version = 6;
+      `);
       await tx.runAsync(
         `UPDATE messages SET status = 'failed', error = ? WHERE status = 'pending'`,
         "The app closed before this reply finished. You can retry it.",
@@ -181,6 +186,37 @@ export class HistoryStore {
     });
   }
 
+  // The empty key belongs to the unfinished new chat. Normal keys are chat IDs.
+  async readDraft(chatId: string | null): Promise<string> {
+    const row = await this.db.getFirstAsync<{ text: string }>(
+      "SELECT text FROM drafts WHERE chat_key = ?",
+      chatId ?? "",
+    );
+    return row?.text ?? "";
+  }
+
+  async saveDraft(chatId: string | null, text: string): Promise<void> {
+    if (text.length > 12_000)
+      throw new Error("Draft exceeds the message limit");
+    await this.db.withExclusiveTransactionAsync(async (tx) => {
+      const key = chatId ?? "";
+      if (!text) {
+        await tx.runAsync("DELETE FROM drafts WHERE chat_key = ?", key);
+        return;
+      }
+      // A delayed write must never resurrect a draft for a deleted conversation.
+      await tx.runAsync(
+        `INSERT INTO drafts (chat_key, text)
+        SELECT ?, ? WHERE ? IS NULL OR EXISTS (SELECT 1 FROM chats WHERE id = ?)
+        ON CONFLICT(chat_key) DO UPDATE SET text = excluded.text`,
+        key,
+        text,
+        chatId,
+        chatId,
+      );
+    });
+  }
+
   // Mutations and their return snapshot succeed or roll back together.
   private async write(action: (tx: SQLiteDatabase) => Promise<void>) {
     let saved: ChatHistory | undefined;
@@ -215,6 +251,10 @@ export class HistoryStore {
     audio?: AudioInput,
   ) {
     return this.write(async (tx) => {
+      const existing = await tx.getFirstAsync(
+        "SELECT id FROM chats WHERE id = ?",
+        id,
+      );
       await tx.runAsync(
         `INSERT INTO chats (id, title, updated_at) VALUES (?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at`,
@@ -222,6 +262,13 @@ export class HistoryStore {
         text.replace(/\s+/g, " ").trim().slice(0, 70),
         now,
       );
+      if (!existing)
+        await tx.runAsync(
+          "UPDATE drafts SET chat_key = ? WHERE chat_key = ''",
+          id,
+        );
+      if (!audio)
+        await tx.runAsync("DELETE FROM drafts WHERE chat_key = ?", id);
       const user = await tx.runAsync(
         "INSERT INTO messages (chat_id, role, text, audio_data, audio_format, audio_metadata, audio_length) VALUES (?, ?, ?, ?, ?, ?, ?)",
         id,
@@ -298,6 +345,7 @@ export class HistoryStore {
         "UPDATE app_state SET active_chat_id = NULL WHERE active_chat_id = ?",
         id,
       );
+      await tx.runAsync("DELETE FROM drafts WHERE chat_key = ?", id);
       await tx.runAsync("DELETE FROM messages WHERE chat_id = ?", id);
       await tx.runAsync("DELETE FROM chats WHERE id = ?", id);
     });

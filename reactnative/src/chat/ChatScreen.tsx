@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
   Keyboard,
   KeyboardAvoidingView,
@@ -19,6 +19,7 @@ import { ChatHeader } from "./ChatHeader";
 import type { ChatColors } from "./theme";
 import { useKeyboardVisible } from "./useKeyboardVisible";
 import { screenStyles } from "./screenStyles";
+import type { PersistentDraft } from "./PersistentDraft";
 import type { PendingReply } from "./ChatController";
 
 type ChatScreenProps = {
@@ -34,7 +35,7 @@ type ChatScreenProps = {
   onStop: () => void;
   onRetryReply: (id: number) => void;
   onOpenSettings: () => void;
-  composerKey: number;
+  draft: PersistentDraft | null;
   onSend: (text: string) => Promise<boolean>;
   onNewChat: () => void;
   onOpenHistory: () => void;
@@ -52,7 +53,7 @@ export function ChatScreen({
   onStop,
   onRetryReply,
   onOpenSettings,
-  composerKey,
+  draft,
   onSend,
   onNewChat,
   onOpenHistory,
@@ -118,6 +119,7 @@ export function ChatScreen({
           colors={colors}
           history={history}
           scrollRequest={scrollRequest}
+          pending={pending}
           onRetryReply={onRetryReply}
           busy={busy || pending !== null}
         />
@@ -137,21 +139,24 @@ export function ChatScreen({
             Replying in another chat. You can stop it here.
           </Text>
         )}
-        <AudioComposer
-          key={composerKey}
-          colors={colors}
-          visible={visible}
-          disabled={!history || !connected || busy}
-          pending={pending !== null}
-          onSendText={sendMessage}
-          onStopReply={onStop}
-          settings={settings}
-          onSend={async (audio, chosen) => {
-            const sent = await onSendAudio(audio, chosen);
-            if (sent) setScrollRequest((value) => value + 1);
-            return sent;
-          }}
-        />
+        {draft !== null && (
+          <AudioComposer
+            key={draft.key}
+            draft={draft}
+            colors={colors}
+            visible={visible}
+            disabled={!history || !connected || busy}
+            pending={pending !== null}
+            onSendText={sendMessage}
+            onStopReply={onStop}
+            settings={settings}
+            onSend={async (audio, chosen) => {
+              const sent = await onSendAudio(audio, chosen);
+              if (sent) setScrollRequest((value) => value + 1);
+              return sent;
+            }}
+          />
+        )}
       </SafeAreaView>
     </KeyboardAvoidingView>
   );
@@ -161,9 +166,13 @@ function MessageList({
   colors,
   history,
   scrollRequest,
+  pending,
   onRetryReply,
   busy,
-}: Pick<ChatScreenProps, "colors" | "history" | "onRetryReply" | "busy"> & {
+}: Pick<
+  ChatScreenProps,
+  "colors" | "history" | "onRetryReply" | "busy" | "pending"
+> & {
   scrollRequest: number;
 }) {
   const listRef = useRef<LegendListRef>(null);
@@ -220,6 +229,8 @@ function MessageList({
           >
             {item.audio ? (
               <AudioMessage audio={item.audio} colors={colors} />
+            ) : pending?.messageId === item.id ? (
+              <StreamingReply pending={pending} colors={colors} />
             ) : (
               <Text
                 selectable
@@ -259,6 +270,24 @@ function MessageList({
         </View>
       )}
     />
+  );
+}
+
+function StreamingReply({
+  pending,
+  colors,
+}: {
+  pending: PendingReply;
+  colors: ChatColors;
+}) {
+  const text = useSyncExternalStore(
+    pending.stream.subscribe,
+    pending.stream.getSnapshot,
+  );
+  return (
+    <Text selectable style={[styles.messageText, { color: colors.text }]}>
+      {text || "Thinking…"}
+    </Text>
   );
 }
 

@@ -15,19 +15,16 @@ test("request is bounded, authenticated, and parsed without a live API call", as
     [user],
     settings,
     signal(),
+    () => {},
     async (url, options) => {
       assert.equal(url, "https://openrouter.ai/api/v1/chat/completions");
       assert.equal(options.headers.Authorization, `Bearer ${settings.apiKey}`);
       const body = JSON.parse(options.body);
       assert.equal(body.model, "openrouter/free");
       assert.equal(body.max_tokens, 512);
-      assert.equal(body.stream, false);
+      assert.equal(body.stream, true);
       assert.deepEqual(body.messages, [{ role: "user", content: "Hello" }]);
-      return Response.json({
-        model: "chosen/free-model",
-        choices: [{ message: { content: "Hi!" } }],
-        usage: { cost: 0 },
-      });
+      return streamResponse("Hi!", "chosen/free-model", 0);
     },
   );
   assert.deepEqual(result, {
@@ -41,16 +38,26 @@ test("authentication/rate-limit and malformed responses fail without automatic r
   for (const status of [401, 402, 429, 503]) {
     let calls = 0;
     await assert.rejects(
-      completeReply([user], settings, signal(), async () => {
-        calls++;
-        return new Response("", { status });
-      }),
+      completeReply(
+        [user],
+        settings,
+        signal(),
+        () => {},
+        async () => {
+          calls++;
+          return new Response("", { status });
+        },
+      ),
     );
     assert.equal(calls, 1);
   }
   await assert.rejects(
-    completeReply([user], settings, signal(), async () =>
-      Response.json({ choices: [] }),
+    completeReply(
+      [user],
+      settings,
+      signal(),
+      () => {},
+      async () => streamResponse(""),
     ),
     /no text/,
   );
@@ -74,6 +81,7 @@ test("aborting propagates to the transport", async () => {
     [user],
     settings,
     controller.signal,
+    () => {},
     (_url, options) =>
       new Promise((_resolve, reject) => {
         options.signal.addEventListener(
@@ -105,22 +113,27 @@ test("QR and clipboard key formats are validated without executing links or acce
 
 test("provider errors retain actionable details and redact credentials", async () => {
   await assert.rejects(
-    completeReply([user], settings, signal(), async () =>
-      Response.json(
-        {
-          error: {
-            message: "Provider rejected request",
-            metadata: {
-              raw: JSON.stringify({
-                error: {
-                  message: `Unsupported parameter; key ${settings.apiKey}`,
-                },
-              }),
+    completeReply(
+      [user],
+      settings,
+      signal(),
+      () => {},
+      async () =>
+        Response.json(
+          {
+            error: {
+              message: "Provider rejected request",
+              metadata: {
+                raw: JSON.stringify({
+                  error: {
+                    message: `Unsupported parameter; key ${settings.apiKey}`,
+                  },
+                }),
+              },
             },
           },
-        },
-        { status: 400 },
-      ),
+          { status: 400 },
+        ),
     ),
     (error) => {
       assert.match(error.message, /Unsupported parameter/);
@@ -133,20 +146,25 @@ test("provider errors retain actionable details and redact credentials", async (
 
 test("429 errors distinguish upstream provider limits from unspecified rate limits", async () => {
   await assert.rejects(
-    completeReply([user], settings, signal(), async () =>
-      Response.json(
-        {
-          error: {
-            message: "Provider returned error",
-            metadata: {
-              raw: JSON.stringify({
-                error: { message: "temporarily rate-limited upstream" },
-              }),
+    completeReply(
+      [user],
+      settings,
+      signal(),
+      () => {},
+      async () =>
+        Response.json(
+          {
+            error: {
+              message: "Provider returned error",
+              metadata: {
+                raw: JSON.stringify({
+                  error: { message: "temporarily rate-limited upstream" },
+                }),
+              },
             },
           },
-        },
-        { status: 429 },
-      ),
+          { status: 429 },
+        ),
     ),
     /model provider is rate limited/,
   );
@@ -155,6 +173,7 @@ test("429 errors distinguish upstream provider limits from unspecified rate limi
       [user],
       settings,
       signal(),
+      () => {},
       async () => new Response("", { status: 429 }),
     ),
     /request was rate limited/,
@@ -172,6 +191,7 @@ test("audio sends only the recording and reads an ordinary text answer", async (
     [{ ...user, text: "Voice message", audio }],
     { ...settings, model: "google/gemini-3.8-flash" },
     signal(),
+    () => {},
     async (_url, options) => {
       const body = JSON.parse(options.body);
       assert.equal(body.model, "google/gemini-3.8-flash");
@@ -188,10 +208,7 @@ test("audio sends only the recording and reads an ordinary text answer", async (
       ]);
       assert.equal(body.response_format, undefined);
       assert.deepEqual(body.reasoning, { effort: "low" });
-      return Response.json({
-        choices: [{ message: { content: "Hej!" } }],
-        usage: { cost: 0.001 },
-      });
+      return streamResponse("Hej!", settings.model, 0.001);
     },
   );
   assert.equal(result.text, "Hej!");
@@ -204,6 +221,7 @@ test("invalid audio never reaches the network", async () => {
       [{ ...user, audio: { data: "", format: "exe" } }],
       settings,
       signal(),
+      () => {},
       async () => {
         assert.fail("invalid audio must never reach the network");
       },
@@ -218,17 +236,21 @@ test("text follow-ups preserve earlier audio context and honor the selected mode
     { ...user, id: 2, role: "assistant", text: "Hello!" },
     { ...user, id: 3, text: "What did I say?" },
   ];
-  await completeReply(history, settings, signal(), async (_url, options) => {
-    const body = JSON.parse(options.body);
-    assert.equal(body.model, settings.model);
-    assert.deepEqual(body.messages[0].content, [
-      { type: "input_audio", input_audio: audio },
-    ]);
-    assert.equal(body.messages[2].content, "What did I say?");
-    return Response.json({
-      choices: [{ message: { content: "You said hello." } }],
-    });
-  });
+  await completeReply(
+    history,
+    settings,
+    signal(),
+    () => {},
+    async (_url, options) => {
+      const body = JSON.parse(options.body);
+      assert.equal(body.model, settings.model);
+      assert.deepEqual(body.messages[0].content, [
+        { type: "input_audio", input_audio: audio },
+      ]);
+      assert.equal(body.messages[2].content, "What did I say?");
+      return streamResponse("You said hello.");
+    },
+  );
 });
 
 test("retained audio context is bounded independently of text", () => {
@@ -244,6 +266,7 @@ test("incompatible selected models surface a provider error without a model swit
       [{ ...user, audio: { data: "UklGRg==", format: "wav" } }],
       settings,
       signal(),
+      () => {},
       async (_url, options) => {
         calls++;
         assert.equal(JSON.parse(options.body).model, settings.model);
@@ -257,3 +280,10 @@ test("incompatible selected models surface a provider error without a model swit
   );
   assert.equal(calls, 1);
 });
+
+function streamResponse(text, model = settings.model, cost = null) {
+  return new Response(
+    `data: ${JSON.stringify({ model, choices: [{ delta: { content: text } }], usage: { cost } })}\n\ndata: [DONE]\n\n`,
+    { headers: { "Content-Type": "text/event-stream" } },
+  );
+}

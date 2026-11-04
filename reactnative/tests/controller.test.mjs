@@ -32,6 +32,7 @@ async function setup(reply) {
     await store.read(),
     reply,
     () => `chat-${++next}`,
+    await store.readDraft(null),
   );
   return { store, sqlite, controller };
 }
@@ -266,6 +267,99 @@ test("stopping while lazy audio is loading cannot start a late model request", a
     await stopping;
     assert.equal(calls, 0);
     assert.equal((await store.read()).messages.at(-1).status, "cancelled");
+  } finally {
+    await controller.dispose();
+    sqlite.close();
+  }
+});
+
+test("stream updates only the reply store; Stop persists partial text and ignores late chunks", async () => {
+  const request = deferred(),
+    started = deferred();
+  let update;
+  const { controller, store, sqlite } = await setup(
+    (_messages, _settings, _signal, onText) => {
+      update = onText;
+      started.resolve();
+      return request.promise;
+    },
+  );
+  try {
+    await controller.send("Stream", settings);
+    await started.promise;
+    const snapshot = controller.getSnapshot();
+    const stream = snapshot.pending.stream;
+    let notifications = 0;
+    const unsubscribe = stream.subscribe(() => {
+      notifications++;
+    });
+    update("First");
+    update("First second");
+    update("First second third");
+    assert.equal(
+      controller.getSnapshot(),
+      snapshot,
+      "chunks never publish the whole chat state",
+    );
+    assert.equal(
+      (await store.read()).messages.at(-1).text,
+      "",
+      "chunks never write SQLite",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 55));
+    assert.equal(stream.getSnapshot(), "First second third");
+    assert.equal(notifications, 1, "rapid chunks are coalesced");
+    await controller.stop();
+    const saved = (await store.read()).messages.at(-1);
+    assert.equal(saved.status, "cancelled");
+    assert.equal(saved.text, "First second third");
+    update("Late chunk");
+    request.resolve({ text: "Late completion", model: "test", cost: 0 });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal((await store.read()).messages.at(-1).text, saved.text);
+    assert.equal(stream.getSnapshot(), saved.text);
+    unsubscribe();
+  } finally {
+    await controller.dispose();
+    sqlite.close();
+  }
+});
+
+test("failed streams retain partial text and retry starts with an empty reply store", async () => {
+  const requests = [deferred(), deferred()],
+    started = [deferred(), deferred()];
+  const updates = [];
+  let calls = 0;
+  const { controller, store, sqlite } = await setup(
+    (_messages, _settings, _signal, onText) => {
+      const index = calls++;
+      updates[index] = onText;
+      started[index].resolve();
+      return requests[index].promise;
+    },
+  );
+  try {
+    await controller.send("Stream", settings);
+    await started[0].promise;
+    updates[0]("Partial reply");
+    requests[0].reject(new Error("Stream disconnected"));
+    await waitFor(controller, (state) => !state.pending);
+    const failed = (await store.read()).messages.at(-1);
+    assert.equal(failed.status, "failed");
+    assert.equal(failed.text, "Partial reply");
+    await controller.retryReply(failed.id, settings);
+    await started[1].promise;
+    const stream = controller.getSnapshot().pending.stream;
+    assert.equal(stream.getSnapshot(), "");
+    updates[0]("Stale retry text");
+    assert.equal(stream.latest, "");
+    updates[1]("Complete reply");
+    requests[1].resolve({ text: "Complete reply", model: "actual", cost: 0 });
+    await waitFor(controller, (state) => !state.pending);
+    const final = (await store.read()).messages.at(-1);
+    assert.equal(final.id, failed.id);
+    assert.equal(final.text, "Complete reply");
+    assert.equal(final.status, "complete");
   } finally {
     await controller.dispose();
     sqlite.close();

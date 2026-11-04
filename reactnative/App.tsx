@@ -2,7 +2,7 @@ import { useState } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "./src/chat/queryClient";
 import { StatusBar } from "expo-status-bar";
-import { Alert, useColorScheme } from "react-native";
+import { Alert, Keyboard, useColorScheme } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import type { SavedChat } from "./src/chat/history";
@@ -18,6 +18,8 @@ export default function App() {
   const colors = palettes[dark ? "dark" : "light"];
   const {
     history,
+    draft,
+    flushDraft,
     busy,
     pending,
     error,
@@ -32,11 +34,10 @@ export default function App() {
   const model = useModelSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [composerKey, setComposerKey] = useState(0);
 
   async function openChat(id: string | null) {
     if (await select(id)) {
-      setComposerKey((value) => value + 1);
+      Keyboard.dismiss();
       setHistoryOpen(false);
     }
   }
@@ -51,10 +52,7 @@ export default function App() {
           text: "Delete",
           style: "destructive",
           onPress: () => {
-            void remove(chat.id).then((removed) => {
-              if (removed && chat.id === history?.activeId)
-                setComposerKey((value) => value + 1);
-            });
+            void remove(chat.id);
           },
         },
       ],
@@ -82,14 +80,21 @@ export default function App() {
             void retryReply(id, model.settings);
           }}
           onOpenSettings={() => {
-            if (model.ready) setSettingsOpen(true);
+            if (model.ready)
+              void flushDraft().then((saved) => {
+                if (saved) setSettingsOpen(true);
+              });
           }}
-          composerKey={composerKey}
+          draft={draft}
           onSend={(text) => send(text, model.settings)}
           onNewChat={() => {
             void openChat(null);
           }}
-          onOpenHistory={() => setHistoryOpen(true)}
+          onOpenHistory={() => {
+            void flushDraft().then((saved) => {
+              if (saved) setHistoryOpen(true);
+            });
+          }}
           onRetry={retry}
         />
         <HistoryScreen
@@ -105,7 +110,10 @@ export default function App() {
           }}
           onDelete={deleteChat}
           onSettings={() => {
-            if (model.ready) setSettingsOpen(true);
+            if (model.ready)
+              void flushDraft().then((saved) => {
+                if (saved) setSettingsOpen(true);
+              });
           }}
         />
         {settingsOpen && model.ready && (

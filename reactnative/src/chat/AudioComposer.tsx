@@ -18,10 +18,11 @@ import type { ModelSettings } from "./openRouter";
 import { useRecording } from "./useRecording";
 import type { AudioInput } from "./history";
 import type { ChatColors } from "./theme";
-import { editDraft, submitDraft, type Draft } from "./draft.ts";
+import type { PersistentDraft } from "./PersistentDraft";
 import { LiveAudioWaveform, audioTime } from "./AudioWaveform";
 
 type Props = {
+  draft: PersistentDraft;
   colors: ChatColors;
   visible: boolean;
   disabled: boolean;
@@ -33,6 +34,7 @@ type Props = {
 };
 
 export function AudioComposer({
+  draft,
   colors,
   visible,
   disabled,
@@ -44,8 +46,9 @@ export function AudioComposer({
 }: Props) {
   const recording = useRecording(visible, (audio) => onSend(audio, settings));
   const inputRef = useRef<TextInputInstance>(null);
-  const draftRef = useRef<Draft>({ text: "", version: 0 });
-  const [hasText, setHasText] = useState(false);
+  const [hasText, setHasText] = useState(
+    () => draft.value.text.trim().length > 0,
+  );
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const lockRef = useRef(false);
@@ -81,8 +84,7 @@ export function AudioComposer({
   async function send() {
     if (hasAudio) await recording.send();
     else
-      await submitDraft(
-        draftRef.current,
+      await draft.submit(
         onSendText,
         () => {
           inputRef.current?.clear();
@@ -97,7 +99,7 @@ export function AudioComposer({
   }
 
   function changeDraft(text: string) {
-    editDraft(draftRef.current, text);
+    draft.edit(text);
     const nextHasText = text.trim().length > 0;
     if (nextHasText !== hasText) setHasText(nextHasText);
   }
@@ -158,6 +160,8 @@ export function AudioComposer({
         )}
         <TextInput
           ref={inputRef}
+          defaultValue={draft.initialText}
+          editable={!draft.suspended}
           accessibilityLabel="Message"
           placeholder="Message…"
           placeholderTextColor={colors.muted}

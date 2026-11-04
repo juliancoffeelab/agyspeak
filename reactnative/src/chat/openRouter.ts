@@ -1,3 +1,4 @@
+import { createParser } from "eventsource-parser";
 import type { AudioInput, PromptMessage } from "./history";
 import { selectContext } from "./context.ts";
 
@@ -29,6 +30,7 @@ export type ReplyFunction = (
   messages: PromptMessage[],
   settings: ModelSettings,
   signal: AbortSignal,
+  onText: (text: string) => void,
 ) => Promise<Completion>;
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -106,6 +108,7 @@ export async function completeReply(
   messages: PromptMessage[],
   settings: ModelSettings,
   signal: AbortSignal,
+  onText: (text: string) => void,
   fetcher: typeof fetch = fetch,
 ): Promise<Completion> {
   const context = requestMessages(messages);
@@ -130,7 +133,7 @@ export async function completeReply(
           model: settings.model,
           messages: context,
           max_tokens: audioTurn ? 1024 : 512,
-          stream: false,
+          stream: true,
           reasoning:
             settings.model === AUDIO_MODEL
               ? { effort: "low" }
@@ -142,37 +145,79 @@ export async function completeReply(
       const body: unknown = await response.json().catch(() => null);
       throw providerError(response.status, body, settings.apiKey);
     }
-    const data: unknown = await response.json();
-    if (!record(data))
-      throw new Error("OpenRouter returned an invalid response.");
-    if (record(data.error))
-      throw providerError(
-        typeof data.error.code === "number" ? data.error.code : 502,
-        data,
-        settings.apiKey,
-      );
-    const first: unknown = Array.isArray(data.choices)
-      ? data.choices[0]
-      : undefined;
-    const message: unknown = record(first) ? first.message : undefined;
-    if (
-      !record(message) ||
-      typeof message.content !== "string" ||
-      !message.content.trim()
-    ) {
-      throw new Error(
-        "The model returned no text. You can retry or choose another model.",
-      );
+    if (!response.body)
+      throw new Error("OpenRouter returned no response stream.");
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let text = "";
+    let model = settings.model;
+    let cost: number | null = null;
+    let finished = false;
+    const parser = createParser({
+      maxBufferSize: 1_048_576,
+      onError() {
+        throw new Error("OpenRouter returned an invalid response stream.");
+      },
+      onEvent(event) {
+        if (finished || controller.signal.aborted) return;
+        if (event.data === "[DONE]") {
+          finished = true;
+          return;
+        }
+        let data: unknown;
+        try {
+          data = JSON.parse(event.data);
+        } catch {
+          throw new Error("OpenRouter returned an invalid response stream.");
+        }
+        if (!record(data))
+          throw new Error("OpenRouter returned an invalid response stream.");
+        if (record(data.error))
+          throw providerError(
+            typeof data.error.code === "number" ? data.error.code : 502,
+            data,
+            settings.apiKey,
+          );
+        if (typeof data.model === "string") model = data.model;
+        if (
+          record(data.usage) &&
+          typeof data.usage.cost === "number" &&
+          Number.isFinite(data.usage.cost)
+        )
+          cost = data.usage.cost;
+        const choice: unknown = Array.isArray(data.choices)
+          ? data.choices[0]
+          : undefined;
+        const delta =
+          record(choice) && record(choice.delta) ? choice.delta : null;
+        if (delta && typeof delta.content === "string" && delta.content) {
+          text += delta.content;
+          onText(text);
+        }
+      },
+    });
+    try {
+      while (!finished) {
+        const chunk = await reader.read();
+        if (controller.signal.aborted) throw new Error("Reply cancelled.");
+        if (chunk.done) {
+          parser.feed(decoder.decode());
+          break;
+        }
+        parser.feed(decoder.decode(chunk.value, { stream: true }));
+      }
+      if (!finished)
+        throw new Error("The response stream ended early. You can retry it.");
+      if (!text.trim())
+        throw new Error(
+          "The model returned no text. You can retry or choose another model.",
+        );
+      return { text, model, cost };
+    } finally {
+      // Cancel unread bytes on Stop, parser errors, or after the terminal frame.
+      await reader.cancel().catch(() => undefined);
+      reader.releaseLock();
     }
-    const cost =
-      record(data.usage) && typeof data.usage.cost === "number"
-        ? data.usage.cost
-        : null;
-    return {
-      text: message.content,
-      model: typeof data.model === "string" ? data.model : settings.model,
-      cost,
-    };
   } catch (cause) {
     if (controller.signal.aborted && !signal.aborted)
       throw new Error("The request timed out. You can retry it.", { cause });
