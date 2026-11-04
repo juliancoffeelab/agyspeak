@@ -5,10 +5,12 @@ import { HistoryStore } from '../src/chat/history.ts';
 export function connect(filename = ':memory:') {
   const sqlite = new DatabaseSync(filename);
   let failNextRead = false;
+  const queries = [];
   const db = {
     execAsync: async sql => sqlite.exec(sql),
     getFirstAsync: async (sql, ...args) => sqlite.prepare(sql).get(...args) ?? null,
     getAllAsync: async (sql, ...args) => {
+      queries.push({ sql, args });
       if (failNextRead) { failNextRead = false; throw new Error('Simulated snapshot read failure'); }
       return sqlite.prepare(sql).all(...args);
     },
@@ -22,7 +24,7 @@ export function connect(filename = ':memory:') {
       catch (error) { sqlite.exec('ROLLBACK'); throw error; }
     },
   };
-  return { store: new HistoryStore(db), sqlite, failRead: () => { failNextRead = true; } };
+  return { store: new HistoryStore(db), sqlite, queries, failRead: () => { failNextRead = true; } };
 }
 
 export async function appendTurn(store, id, text, reply, now) {

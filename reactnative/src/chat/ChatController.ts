@@ -1,5 +1,5 @@
 import type { AudioInput, ChatHistory, HistoryStore } from './history';
-import { AUDIO_MODEL, validateAudio, type ModelSettings, type ReplyFunction } from './openRouter.ts';
+import { validateAudio, type ModelSettings, type ReplyFunction } from './openRouter.ts';
 
 export type PendingReply = { chatId: string; messageId: number };
 export type ChatState = { history: ChatHistory; saving: boolean; pending: PendingReply | null; error: string | null };
@@ -33,7 +33,7 @@ export class ChatController {
     this.listeners.forEach(listener => listener());
   }
 
-  private write(action: () => Promise<ChatHistory>) {
+  private write<T>(action: () => Promise<T>) {
     const result = this.writes.then(action);
     this.writes = result.catch(() => undefined);
     return result;
@@ -64,7 +64,7 @@ export class ChatController {
     const run: Run = { chatId: history.activeId, messageId: pending.id, abort: new AbortController() };
     this.active = run;
     this.publish({ pending: { chatId: run.chatId, messageId: run.messageId } });
-    void this.generate(run, history, settings);
+    void this.generate(run, settings);
     return true;
   }
 
@@ -85,19 +85,20 @@ export class ChatController {
       return Promise.resolve(false);
     }
     const id = this.state.history.activeId ?? this.createId();
-    return this.start({ ...settings, model: AUDIO_MODEL }, () => this.store.beginReply(id, 'Voice message', AUDIO_MODEL, Date.now(), audio));
+    return this.start(settings, () => this.store.beginReply(id, 'Voice message', settings.model, Date.now(), audio));
   }
 
   retryReply(id: number, settings: ModelSettings) {
-    if (this.state.history.messages.findLast(message => message.role === 'user')?.audio) settings = { ...settings, model: AUDIO_MODEL };
     return this.start(settings, () => this.store.retryReply(id, settings.model, Date.now()));
   }
 
-  private async generate(run: Run, history: ChatHistory, settings: ModelSettings) {
+  private async generate(run: Run, settings: ModelSettings) {
     try {
-      const completion = await this.reply(history.messages, settings, run.abort.signal);
+      const messages = await this.write(() => this.store.readContext(run.chatId));
       if (this.active !== run || run.abort.signal.aborted) return;
-      const saved = await this.write(() => this.store.finishReply(run.messageId, 'complete', completion.text, null, completion.model, completion.transcript));
+      const completion = await this.reply(messages, settings, run.abort.signal);
+      if (this.active !== run || run.abort.signal.aborted) return;
+      const saved = await this.write(() => this.store.finishReply(run.messageId, 'complete', completion.text, null, completion.model));
       if (this.active !== run) return;
       this.active = null;
       this.publish({ history: saved, pending: null });

@@ -136,30 +136,47 @@ test('disposing during the initial save cannot start a late model request', asyn
   } finally { sqlite.close(); }
 });
 
-test('voice audio survives interruption and retry; transcript and reply replace it atomically', async () => {
-  const audio = { data: 'UklGRg==', format: 'm4a' };
+test('voice audio and its level display survive failure, retry, and successful completion', async () => {
+  const audio = { data: 'UklGRg==', format: 'm4a', durationMillis: 2300, levels: [0.1, 0.8, 0.2] };
   let calls = 0;
   const { controller, store, sqlite } = await setup(async (messages, selected) => {
     calls++;
-    assert.equal(selected.model, 'google/gemini-3.8-flash');
-    assert.deepEqual(messages[0].audio, audio);
+    assert.equal(selected.model, settings.model);
+    assert.deepEqual(messages[0].audio, { data: audio.data, format: audio.format });
     if (calls === 1) throw new Error('Offline');
-    return { text: 'Hej!', transcript: 'Hej där!', model: selected.model, cost: 0 };
+    return { text: 'Hej!', model: selected.model, cost: 0 };
   });
   try {
     assert.equal(await controller.sendAudio(audio, settings), true);
     await waitFor(controller, s => !s.pending);
     await store.initialize();
     let saved = await store.read();
-    assert.deepEqual(saved.messages[0].audio, audio);
+    assert.deepEqual(saved.messages[0].audio, { id: saved.messages[0].id, encodedLength: audio.data.length, format: audio.format, durationMillis: audio.durationMillis, levels: audio.levels });
     const ids = saved.messages.map(m => m.id);
     await controller.retryReply(ids[1], settings);
     await waitFor(controller, s => !s.pending);
     saved = await store.read();
     assert.deepEqual(saved.messages.map(m => m.id), ids);
-    assert.equal(saved.messages[0].text, 'Hej där!');
-    assert.equal(saved.messages[0].audio, undefined);
-    assert.equal(saved.chats[0].title, 'Hej där!');
+    assert.equal(saved.messages[0].text, 'Voice message');
+    assert.deepEqual(saved.messages[0].audio, { id: saved.messages[0].id, encodedLength: audio.data.length, format: audio.format, durationMillis: audio.durationMillis, levels: audio.levels });
+    assert.equal(saved.chats[0].title, 'Voice message');
     assert.equal(saved.messages[1].text, 'Hej!');
+  } finally { await controller.dispose(); sqlite.close(); }
+});
+
+test('stopping while lazy audio is loading cannot start a late model request', async () => {
+  let calls = 0;
+  const { controller, store, sqlite } = await setup(async () => { calls++; return { text: 'No', model: 'test/model', cost: 0 }; });
+  const entered = deferred(), gate = deferred();
+  const read = store.readContext.bind(store);
+  store.readContext = async id => { entered.resolve(); await gate.promise; return read(id); };
+  try {
+    await controller.send('Wait for context', settings);
+    await entered.promise;
+    const stopping = controller.stop();
+    gate.resolve();
+    await stopping;
+    assert.equal(calls, 0);
+    assert.equal((await store.read()).messages.at(-1).status, 'cancelled');
   } finally { await controller.dispose(); sqlite.close(); }
 });

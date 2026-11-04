@@ -1,6 +1,7 @@
 export const palettes = {
   light: {
     background: '#faf9f6',
+    surface: '#ffffff',
     text: '#20211f',
     muted: '#6b6d66',
     line: '#dedfd8',
@@ -10,6 +11,7 @@ export const palettes = {
   },
   dark: {
     background: '#191b19',
+    surface: '#242724',
     text: '#eeefe8',
     muted: '#a1a79d',
     line: '#363b35',

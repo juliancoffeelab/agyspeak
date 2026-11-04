@@ -1,7 +1,11 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
 
+import { selectContext, summarizeLevels } from './context.ts';
+
 export type ReplyStatus = 'complete' | 'pending' | 'failed' | 'cancelled';
-export type AudioInput = { data: string; format: string };
+export type AudioMetadata = { format: string; durationMillis?: number; levels?: number[] };
+export type AudioInput = AudioMetadata & { data: string };
+export type AudioAttachment = AudioMetadata & { id: number; encodedLength: number };
 export type Message = {
   id: number;
   role: 'user' | 'assistant';
@@ -10,8 +14,9 @@ export type Message = {
   replyTo: number | null;
   error: string | null;
   model: string | null;
-  audio?: AudioInput | null;
+  audio?: AudioAttachment | null;
 };
+export type PromptMessage = Omit<Message, 'audio'> & { audio?: AudioInput | null };
 export type SavedChat = { id: string; title: string; updatedAt: number; preview: string };
 export type ChatHistory = { chats: SavedChat[]; activeId: string | null; messages: Message[] };
 
@@ -26,7 +31,7 @@ export class HistoryStore {
     await this.db.withExclusiveTransactionAsync(async tx => {
       const row = await tx.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
       let version = row?.user_version ?? 0;
-      if (version > 3) throw new Error('Unsupported history database version');
+      if (version > 5) throw new Error('Unsupported history database version');
       if (version === 0) {
         await tx.execAsync(`
           CREATE TABLE chats (id TEXT PRIMARY KEY NOT NULL, title TEXT NOT NULL, updated_at INTEGER NOT NULL);
@@ -61,6 +66,9 @@ export class HistoryStore {
         await tx.execAsync(`ALTER TABLE messages ADD COLUMN audio_data TEXT;
           ALTER TABLE messages ADD COLUMN audio_format TEXT; PRAGMA user_version = 3;`);
       }
+      if (version <= 3) await tx.execAsync('ALTER TABLE messages ADD COLUMN audio_metadata TEXT; PRAGMA user_version = 4;');
+      if (version <= 4) await tx.execAsync(`ALTER TABLE messages ADD COLUMN audio_length INTEGER;
+        UPDATE messages SET audio_length = LENGTH(audio_data) WHERE audio_data IS NOT NULL; PRAGMA user_version = 5;`);
       await tx.runAsync(`UPDATE messages SET status = 'failed', error = ? WHERE status = 'pending'`,
         'The app closed before this reply finished. You can retry it.');
     });
@@ -76,12 +84,34 @@ export class HistoryStore {
         COALESCE((SELECT NULLIF(text, '') FROM messages WHERE chat_id = c.id AND text != '' ORDER BY id DESC LIMIT 1), '') AS preview
       FROM chats c ORDER BY c.updated_at DESC, c.rowid DESC
     `);
-    const rows = activeId === null ? [] : await db.getAllAsync<Message & { audioData: string | null; audioFormat: string | null }>(
-      'SELECT id, role, text, status, reply_to AS replyTo, error, model, audio_data AS audioData, audio_format AS audioFormat FROM messages WHERE chat_id = ? ORDER BY id', activeId,
-    );
-    const messages = rows.map(({ audioData, audioFormat, ...message }) =>
-      audioData && audioFormat ? { ...message, audio: { data: audioData, format: audioFormat } } : message);
+    const messages = activeId === null ? [] : await this.readMessages(db, activeId);
     return { chats, activeId, messages };
+  }
+
+  private async readMessages(db: Reader, chatId: string): Promise<Message[]> {
+    const rows = await db.getAllAsync<Message & { audioFormat: string | null; audioMetadata: string | null; audioLength: number | null }>(
+      `SELECT id, role, text, status, reply_to AS replyTo, error, model,
+        audio_format AS audioFormat, audio_metadata AS audioMetadata, audio_length AS audioLength
+        FROM messages WHERE chat_id = ? ORDER BY id`, chatId);
+    return rows.map(({ audioFormat, audioMetadata, audioLength, ...message }) => {
+      if (audioLength === null || !audioFormat) return message;
+      const metadata = audioMetadata ? JSON.parse(audioMetadata) as Pick<AudioMetadata, 'durationMillis' | 'levels'> : {};
+      return { ...message, audio: { ...metadata, id: message.id, encodedLength: audioLength, format: audioFormat } };
+    });
+  }
+
+  async readContext(chatId: string): Promise<PromptMessage[]> {
+    const selected = selectContext(await this.readMessages(this.db, chatId));
+    const ids = selected.filter(message => message.audio).map(message => message.id);
+    const rows = ids.length === 0 ? [] : await this.db.getAllAsync<{ id: number; data: string }>(
+      `SELECT id, audio_data AS data FROM messages WHERE chat_id = ? AND id IN (${ids.map(() => '?').join(',')})`, chatId, ...ids);
+    const recordings = new Map(rows.map(row => [row.id, row.data]));
+    return selected.map(({ audio, ...message }) => {
+      if (!audio) return message;
+      const data = recordings.get(message.id);
+      if (!data) throw new Error('A recording is missing from this conversation.');
+      return { ...message, audio: { format: audio.format, data } };
+    });
   }
 
   // Mutations and their return snapshot succeed or roll back together.
@@ -106,7 +136,7 @@ export class HistoryStore {
     return this.write(async tx => {
       await tx.runAsync(`INSERT INTO chats (id, title, updated_at) VALUES (?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at`, id, text.replace(/\s+/g, ' ').trim().slice(0, 70), now);
-      const user = await tx.runAsync('INSERT INTO messages (chat_id, role, text, audio_data, audio_format) VALUES (?, ?, ?, ?, ?)', id, 'user', text, audio?.data ?? null, audio?.format ?? null);
+      const user = await tx.runAsync('INSERT INTO messages (chat_id, role, text, audio_data, audio_format, audio_metadata, audio_length) VALUES (?, ?, ?, ?, ?, ?, ?)', id, 'user', text, audio?.data ?? null, audio?.format ?? null, audio ? JSON.stringify({ durationMillis: audio.durationMillis, levels: audio.levels ? summarizeLevels(audio.levels) : undefined }) : null, audio?.data.length ?? null);
       await tx.runAsync(`INSERT INTO messages (chat_id, role, text, status, reply_to, model) VALUES (?, 'assistant', '', 'pending', ?, ?)`,
         id, user.lastInsertRowId, model);
       await tx.runAsync('UPDATE app_state SET active_chat_id = ? WHERE id = 1', id);
@@ -123,17 +153,8 @@ export class HistoryStore {
     });
   }
 
-  finishReply(id: number, status: Exclude<ReplyStatus, 'pending'>, text: string, error: string | null, model: string | null = null, transcript?: string) {
+  finishReply(id: number, status: Exclude<ReplyStatus, 'pending'>, text: string, error: string | null, model: string | null = null) {
     return this.write(async tx => {
-      if (transcript !== undefined) {
-        const user = await tx.getFirstAsync<{ replyTo: number; chatId: string }>(
-          `SELECT reply_to AS replyTo, chat_id AS chatId FROM messages WHERE id = ? AND status = 'pending'`, id);
-        if (user) {
-          await tx.runAsync('UPDATE messages SET text = ?, audio_data = NULL, audio_format = NULL WHERE id = ?', transcript, user.replyTo);
-          await tx.runAsync(`UPDATE chats SET title = ? WHERE id = ? AND ? = (SELECT MIN(id) FROM messages WHERE chat_id = ?)`,
-            transcript.replace(/\s+/g, ' ').trim().slice(0, 70), user.chatId, user.replyTo, user.chatId);
-        }
-      }
       await tx.runAsync(`UPDATE messages SET status = ?, text = ?, error = ?, model = COALESCE(?, model) WHERE id = ? AND status = 'pending'`,
         status, text, error, model, id);
     });

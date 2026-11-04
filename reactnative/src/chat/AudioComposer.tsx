@@ -1,44 +1,40 @@
 import { useEffect, useRef, useState } from 'react';
-import { AppState, Pressable, StyleSheet, Text, View } from 'react-native';
-import {
-  RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync,
-  useAudioRecorder, useAudioRecorderState,
-} from 'expo-audio';
-import { getDocumentAsync } from 'expo-document-picker';
-import { File } from 'expo-file-system';
+import { Keyboard, Pressable, StyleSheet, Text, TextInput, View, type TextInputInstance } from 'react-native';
+import ArrowUp from 'lucide-react-native/icons/arrow-up';
+import Mic from 'lucide-react-native/icons/mic';
+import Plus from 'lucide-react-native/icons/plus';
+import Square from 'lucide-react-native/icons/square';
+import X from 'lucide-react-native/icons/x';
 
-import { MAX_AUDIO_BYTES, type ModelSettings } from './openRouter';
+import type { ModelSettings } from './openRouter';
+import { useRecording } from './useRecording';
 import type { AudioInput } from './history';
 import type { ChatColors } from './theme';
+import { editDraft, submitDraft, type Draft } from './draft.ts';
+import { LiveAudioWaveform, audioTime } from './AudioWaveform';
 
 type Props = {
   colors: ChatColors;
+  visible: boolean;
   disabled: boolean;
+  pending: boolean;
+  onSendText: (text: string) => Promise<boolean>;
+  onStopReply: () => void;
   settings: ModelSettings;
   onSend: (audio: AudioInput, settings: ModelSettings) => Promise<boolean>;
 };
 
-export function AudioComposer({ colors, disabled, settings, onSend }: Props) {
-  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
-  const status = useAudioRecorderState(recorder, 200);
-  const [recording, setRecording] = useState(false);
+export function AudioComposer({ colors, visible, disabled, pending, onSendText, onStopReply, settings, onSend }: Props) {
+  const recording = useRecording(visible, audio => onSend(audio, settings));
+  const inputRef = useRef<TextInputInstance>(null);
+  const draftRef = useRef<Draft>({ text: '', version: 0 });
+  const [hasText, setHasText] = useState(false);
   const [working, setWorking] = useState(false);
-  const [clip, setClip] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const lockRef = useRef(false);
   const aliveRef = useRef(true);
 
-  useEffect(() => {
-    aliveRef.current = true;
-    const subscription = AppState.addEventListener('change', state => {
-      if (state !== 'active' && recorder.isRecording) {
-        void recorder.stop().then(() => {
-          if (aliveRef.current) { setClip(recorder.uri); setRecording(false); }
-        }).catch(() => { if (aliveRef.current) { setRecording(false); setError('Recording was interrupted. Please try again.'); } });
-      }
-    });
-    return () => { aliveRef.current = false; subscription.remove(); };
-  }, [recorder]);
+  useEffect(() => { aliveRef.current = true; return () => { aliveRef.current = false; }; }, []);
 
   async function run(action: () => Promise<void>) {
     if (lockRef.current) return;
@@ -46,82 +42,67 @@ export function AudioComposer({ colors, disabled, settings, onSend }: Props) {
     setWorking(true);
     setError(null);
     try { await action(); }
-    catch (cause) { if (aliveRef.current) setError(cause instanceof Error ? cause.message : 'Couldn’t record or read audio. Please try again.'); }
+    catch (cause) { if (aliveRef.current) setError(cause instanceof Error ? cause.message : 'Couldn’t read audio. Please try again.'); }
     finally { lockRef.current = false; if (aliveRef.current) setWorking(false); }
   }
 
-  async function sendFile(uri: string, name: string) {
-    const file = new File(uri);
-    if (!file.exists || file.size === 0 || file.size > MAX_AUDIO_BYTES) throw new Error('Choose a nonempty audio file under 8 MB.');
-    const format = name.split('.').at(-1)?.toLowerCase() ?? '';
-    const audio = { data: await file.base64(), format };
-    if (!aliveRef.current) return;
-    if (await onSend(audio, settings)) {
-      setClip(null);
-      // The pending turn now owns a durable copy in SQLite.
-      try { file.delete(); } catch { /* The OS can reclaim this cache file. */ }
-    }
+  async function send() {
+    if (hasAudio) await recording.send();
+    else await submitDraft(draftRef.current, onSendText,
+      () => { inputRef.current?.clear(); setHasText(false); },
+      text => {
+        if (!aliveRef.current) return;
+        inputRef.current?.setNativeProps({ text });
+        setHasText(text.trim().length > 0);
+      });
   }
 
-  async function tapMic() {
-    if (recording) {
-      if (recorder.isRecording) await recorder.stop();
-      setRecording(false);
-      const uri = recorder.uri;
-      if (!uri) throw new Error('No recording was saved. Please try again.');
-      setClip(uri);
-      await sendFile(uri, 'recording.m4a');
-    } else if (clip) {
-      await sendFile(clip, 'recording.m4a');
-    } else {
-      const permission = await requestRecordingPermissionsAsync();
-      if (!permission.granted) throw new Error('Allow microphone access in Android settings to record a voice message.');
-      if (!aliveRef.current) return;
-      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
-      await recorder.prepareToRecordAsync();
-      if (!aliveRef.current) return;
-      recorder.record({ forDuration: 120 });
-      setRecording(true);
-    }
+  function changeDraft(text: string) {
+    editDraft(draftRef.current, text);
+    const nextHasText = text.trim().length > 0;
+    if (nextHasText !== hasText) setHasText(nextHasText);
   }
 
-  function discard() {
-    void run(async () => {
-      if (recorder.isRecording) await recorder.stop();
-      const uri = clip ?? recorder.uri;
-      setRecording(false);
-      setClip(null);
-      if (uri) { const file = new File(uri); if (file.exists) file.delete(); }
-    });
-  }
-
-  const seconds = Math.floor(status.durationMillis / 1000);
+  const capture = recording.state;
+  const hasAudio = capture.phase === 'recording' || capture.clip !== null;
+  const canSend = hasAudio || hasText;
+  const blocked = disabled || working || capture.phase === 'preparing' || capture.phase === 'sending';
   return <View style={styles.container}>
-    <Text style={{ color: colors.muted }}>{recording ? `Recording · ${seconds}s / 120s · tap to send` : clip ? 'Recording ready to send' : 'Voice · Gemini 3.8 Flash'}</Text>
-    {error !== null && <Text accessibilityRole="alert" style={{ color: colors.text }}>{error}</Text>}
-    <View style={styles.actions}>
-      <Pressable accessibilityRole="button" accessibilityLabel={recording ? 'Send recording' : clip ? 'Send saved recording' : 'Record voice message'}
-        disabled={disabled || working} onPress={() => { void run(tapMic); }}
-        style={[styles.primary, { backgroundColor: colors.button, opacity: disabled || working ? 0.4 : 1 }]}>
-        <Text style={{ color: colors.buttonText }}>{working ? 'Please wait…' : recording ? 'Send recording' : clip ? 'Send recording' : 'Record'}</Text>
+    {(error ?? capture.error) !== null && <Text accessibilityRole="alert" style={[styles.error, { color: colors.text }]}>{error ?? capture.error}</Text>}
+    <View style={[styles.row, { borderColor: colors.line, backgroundColor: colors.surface }]}>
+      <Pressable accessibilityRole="button" accessibilityLabel={hasAudio ? 'Discard recording' : 'Attach audio file'} disabled={blocked || pending}
+        onPress={() => { void (hasAudio ? recording.discard() : recording.attach()); }} style={[styles.iconButton, { opacity: blocked || pending ? 0.35 : 1 }]}>
+        {hasAudio ? <X size={22} strokeWidth={2} color={colors.muted} /> : <Plus size={22} strokeWidth={2} color={colors.muted} />}
       </Pressable>
-      {recording || clip ? <Pressable accessibilityRole="button" disabled={working} onPress={discard} style={styles.action}>
-        <Text style={{ color: colors.text }}>Discard</Text>
-      </Pressable> : <Pressable accessibilityRole="button" accessibilityLabel="Send audio file" disabled={disabled || working}
-        onPress={() => { void run(async () => {
-          const result = await getDocumentAsync({ type: 'audio/*', copyToCacheDirectory: true, multiple: false });
-          const asset = result.assets?.[0];
-          if (!result.canceled && asset) await sendFile(asset.uri, asset.name);
-        }); }} style={styles.action}>
-        <Text style={{ color: colors.text, opacity: disabled || working ? 0.4 : 1 }}>Send audio file</Text>
-      </Pressable>}
+      {hasAudio && <View style={styles.recording}>
+        <View style={styles.wave}><LiveAudioWaveform levels={capture.levels} color={colors.text} /></View>
+        <Text style={[styles.timer, { color: colors.muted }]}>{audioTime(capture.durationMillis)}</Text>
+      </View>}
+      <TextInput ref={inputRef} accessibilityLabel="Message" placeholder="Message…" placeholderTextColor={colors.muted}
+        underlineColorAndroid="transparent" onChangeText={changeDraft} multiline maxLength={12000}
+        textAlignVertical="top" style={[styles.input, { color: colors.text }, hasAudio && styles.hiddenInput]} />
+      <Pressable accessibilityRole="button" accessibilityLabel={pending ? 'Stop reply' : canSend ? hasAudio ? 'Send recording' : 'Send message' : 'Record voice message'}
+        disabled={blocked} onPress={() => { if (pending) onStopReply(); else if (canSend) void run(send); else { Keyboard.dismiss(); void recording.start(); } }}
+        style={({ pressed }) => [styles.primary, { opacity: blocked ? 0.35 : pressed ? 0.6 : 1 }]}>
+        <View style={[styles.buttonFace, { backgroundColor: colors.button }]}>
+          {pending ? <Square size={17} fill={colors.buttonText} color={colors.buttonText} /> : canSend ?
+            <ArrowUp size={23} strokeWidth={2.25} color={colors.buttonText} /> : <Mic size={21} strokeWidth={2} color={colors.buttonText} />}
+        </View>
+      </Pressable>
     </View>
   </View>;
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, gap: 8 },
-  actions: { flexDirection: 'row', gap: 8, alignItems: 'center' },
-  primary: { minHeight: 48, justifyContent: 'center', borderRadius: 16, paddingHorizontal: 18 },
-  action: { minHeight: 48, justifyContent: 'center', paddingHorizontal: 14 },
+  container: { paddingHorizontal: 12, paddingTop: 8, paddingBottom: 10 },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 2, borderWidth: 1, borderRadius: 26, padding: 4 },
+  input: { flex: 1, minHeight: 44, maxHeight: 160, paddingHorizontal: 6, paddingVertical: 10, fontSize: 16, lineHeight: 24 },
+  hiddenInput: { display: 'none' },
+  recording: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 48 },
+  wave: { flex: 1, minWidth: 0 },
+  primary: { width: 44, height: 48, flexShrink: 0, alignItems: 'center', justifyContent: 'center' },
+  buttonFace: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  iconButton: { width: 44, height: 48, flexShrink: 0, alignItems: 'center', justifyContent: 'center' },
+  timer: { flexShrink: 0, textAlign: 'right', fontVariant: ['tabular-nums'], fontSize: 14, lineHeight: 20, includeFontPadding: false },
+  error: { paddingHorizontal: 8, paddingBottom: 8, fontSize: 14 },
 });

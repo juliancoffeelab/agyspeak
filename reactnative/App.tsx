@@ -18,19 +18,11 @@ export default function App() {
   const model = useModelSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [draft, setDraft] = useState('');
-
-  async function sendMessage() {
-    const pending = draft;
-    const text = pending.trim();
-    if (text && await send(text, model.settings)) {
-      setDraft(current => current === pending ? '' : current);
-    }
-  }
+  const [composerKey, setComposerKey] = useState(0);
 
   async function openChat(id: string | null) {
     if (await select(id)) {
-      setDraft('');
+      setComposerKey(value => value + 1);
       setHistoryOpen(false);
     }
   }
@@ -38,7 +30,11 @@ export default function App() {
   function deleteChat(chat: SavedChat) {
     Alert.alert('Delete chat?', `“${chat.title}” will be permanently deleted from this phone.`, [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete', style: 'destructive', onPress: () => { void remove(chat.id); } },
+      { text: 'Delete', style: 'destructive', onPress: () => {
+        void remove(chat.id).then(removed => {
+          if (removed && chat.id === history?.activeId) setComposerKey(value => value + 1);
+        });
+      } },
     ]);
   }
 
@@ -47,6 +43,7 @@ export default function App() {
       <StatusBar style={dark ? 'light' : 'dark'} />
       <ChatScreen
         colors={colors}
+        visible={!historyOpen && !settingsOpen}
         history={history}
         busy={busy}
         error={error ?? model.error}
@@ -57,9 +54,8 @@ export default function App() {
         onStop={() => { void stop(); }}
         onRetryReply={id => { void retryReply(id, model.settings); }}
         onOpenSettings={() => setSettingsOpen(true)}
-        draft={draft}
-        onDraftChange={setDraft}
-        onSend={sendMessage}
+        composerKey={composerKey}
+        onSend={text => send(text, model.settings)}
         onNewChat={() => { void openChat(null); }}
         onOpenHistory={() => setHistoryOpen(true)}
         onRetry={retry}

@@ -205,22 +205,49 @@ The independent Expo/React Native app lives in `reactnative/`. It uses OpenRoute
 API keys in device secure storage and conversations in SQLite. It is independent
 of the Python application's ACP runtime.
 
-Tap **Voice message**, then **Record** to start and **Send recording** to stop
-and send. **Discard** cancels without a request. Recording stops at 120 seconds;
-backgrounding the app stops capture and keeps the clip ready to send manually.
-**Send audio file** opens Android's file picker, which also supports quiet ADB
-fixture testing: push a clip to `/sdcard/Download/`, then select it in the app.
-Audio files must be under 8 MB. Voice turns always use
-`google/gemini-3.8-flash`, independently of the text model selected in Settings.
-One native audio request returns a transcript in the original language and a text
-reply. There is no automatic spoken playback.
+The composer owns its draft locally. Its uncontrolled native `TextInput` reports
+edits into a ref; React state only tracks whether there is sendable text. Typing
+does not update `App` or the message list. The input stays mounted during audio
+capture, preserving draft text and native selection. Submitting clears it immediately; a failed save restores the original draft
+only when no edits arrived in the meantime. Explicit chat navigation resets the
+composer; creating the first saved turn does not remount it. Composer controls
+use Lucide icons inside a shared rounded surface. Keyboard avoidance is explicit on both
+platforms. The bottom safe-area inset is omitted while the keyboard is visible,
+so navigation-bar padding does not become a gap above the keyboard.
 
-Pending, failed, and stopped voice turns retain audio in SQLite for explicit
-retry, including after restart. Successful turns atomically replace the audio
-with its transcript and save the reply. Only the latest voice attachment is sent;
-completed voice turns use transcript text in subsequent context. Deleting a chat
-also removes its retained audio. Replies use low reasoning effort and share a
-1,024-token limit with the transcript; text-only turns retain the 512-token limit.
+`RecordingSession` owns capture and unsent clips through idle, preparing,
+recording, ready and sending states. `useRecording` adapts Expo's recorder and
+file picker to that owner. Navigation, backgrounding, and unmount invalidate
+pending permission/preparation work before it can start capture. Native operations
+are serialized; failed submissions retain their clip for explicit retry.
+
+The composer has a microphone beside the text field. Tap it to record; the
+send arrow stops and sends, and × discards it. Recording stops at 120 seconds. Backgrounding the app stops capture
+and keeps the clip ready to send manually. The + button opens Android's audio
+file picker, including clips pushed to `/sdcard/Download/` with ADB. Files must be
+under 8 MB.
+
+Voice requests contain native audio attachments with no transcription prompt or
+structured response format. Gemini returns an ordinary text reply. Original
+recordings remain in SQLite for conversation context and retries, but display
+snapshots contain only their reference, format, duration and saved level ticks.
+New clips keep at most 32 peaks for the saved bubble. Context selection uses
+stored sizes before fetching recording bytes, so opening a chat, rendering a
+bubble, and saving a reply never load the raw audio. Schema migration preserves
+existing recordings and adds their encoded lengths for lazy loading. Live capture shows a scrolling window of recent microphone levels that fills
+the space beside the timer, without regrouping older samples. Saved audio
+bubbles summarize the full recording; imported files without capture data use a plain audio indicator. These
+are amplitude levels, not a frequency spectrogram. There is no automatic
+transcription or spoken playback. Existing transcripts from older versions remain
+as text because their original recordings were already removed.
+
+Every request uses the selected model, including voice turns and text follow-ups
+with audio context. Unsupported audio input is reported as a provider error; no
+model is silently substituted. Gemini Flash uses low thinking effort. Requests
+with audio context have a 1,024-token reply limit.
+Context is bounded to recent history with 24,000 text characters and 12 MB of
+encoded audio data (before base64 expansion). Text-only requests keep their
+512-token limit. Deleting a chat removes its recordings and capture metadata.
 No inference runs as part of `pnpm check`.
 
 From `reactnative/`, run `pnpm install` and `pnpm check`. `pnpm android` builds

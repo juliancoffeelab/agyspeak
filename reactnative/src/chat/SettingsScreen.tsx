@@ -61,7 +61,7 @@ export function SettingsScreen({ colors, initial, onSave, onClose }: SettingsScr
                   <Text style={{ color: colors.text }}>Use Gemini 3.8 Flash</Text>
                 </Pressable>
                 <Pressable accessibilityRole="button" onPress={() => setModel('openrouter/free')} style={styles.action}><Text style={{ color: colors.text }}>Use free router</Text></Pressable>
-                <Text style={[styles.hint, { color: colors.muted }]}>Gemini 3.8 Flash currently costs $0.825/M input tokens and $4.125/M output tokens. The free router selects an available free model. Voice messages use Gemini Flash and send audio for transcription and a reply. Text replies are limited to 512 tokens; voice transcripts and replies share 1,024 tokens.</Text>
+                <Text style={[styles.hint, { color: colors.muted }]}>Gemini 3.8 Flash currently costs $0.825/M input tokens and $4.125/M output tokens. The free router selects an available free model. Voice messages send recordings directly to the selected model, which must support audio. Text replies are limited to 512 tokens; replies with audio context are limited to 1,024 tokens.</Text>
                 {error !== null && <Text accessibilityRole="alert" style={[styles.hint, { color: colors.text }]}>{error}</Text>}
                 <Pressable accessibilityRole="button" disabled={saving} onPress={() => { void save(); }} style={[styles.save, { backgroundColor: colors.button, opacity: saving ? 0.5 : 1 }]}>
                   <Text style={{ color: colors.buttonText, fontWeight: '600' }}>{saving ? 'Saving…' : 'Save'}</Text>

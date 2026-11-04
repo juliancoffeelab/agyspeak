@@ -78,27 +78,51 @@ test('429 errors distinguish upstream provider limits from unspecified rate limi
   await assert.rejects(completeReply([user], settings, signal(), async () => new Response('', { status: 429 })), /request was rate limited/);
 });
 
-test('audio uses Gemini, sends native audio, and parses transcript plus answer in one request', async () => {
-  const audio = { data: 'UklGRg==', format: 'm4a' };
-  const result = await completeReply([{ ...user, text: 'Voice message', audio }], settings, signal(), async (_url, options) => {
+test('audio sends only the recording and reads an ordinary text answer', async () => {
+  const audio = { data: 'UklGRg==', format: 'm4a', durationMillis: 3000, levels: [0.1, 0.8] };
+  const result = await completeReply([{ ...user, text: 'Voice message', audio }], { ...settings, model: 'google/gemini-3.8-flash' }, signal(), async (_url, options) => {
     const body = JSON.parse(options.body);
     assert.equal(body.model, 'google/gemini-3.8-flash');
-    assert.deepEqual(body.messages[0].content[1], { type: 'input_audio', input_audio: audio });
-    assert.equal(body.response_format.json_schema.strict, true);
+    assert.deepEqual(body.messages, [{ role: 'user', content: [{ type: 'input_audio', input_audio: { data: audio.data, format: audio.format } }] }]);
+    assert.equal(body.response_format, undefined);
     assert.deepEqual(body.reasoning, { effort: 'low' });
-    return Response.json({ choices: [{ message: { content: JSON.stringify({ transcript: 'Hej där!', reply: 'Hej!' }) } }], usage: { cost: 0.001 } });
+    return Response.json({ choices: [{ message: { content: 'Hej!' } }], usage: { cost: 0.001 } });
   });
-  assert.equal(result.transcript, 'Hej där!');
   assert.equal(result.text, 'Hej!');
   assert.equal(result.cost, 0.001);
 });
 
-test('invalid audio and malformed voice replies cannot silently become a completed turn', async () => {
-  const voice = { ...user, audio: { data: 'UklGRg==', format: 'wav' } };
-  await assert.rejects(completeReply([{ ...voice, audio: { data: '', format: 'exe' } }], settings, signal(), async () => {
+test('invalid audio never reaches the network', async () => {
+  await assert.rejects(completeReply([{ ...user, audio: { data: '', format: 'exe' } }], settings, signal(), async () => {
     assert.fail('invalid audio must never reach the network');
   }));
-  for (const content of ['not json', '{"transcript":"","reply":"Hi"}', '{"transcript":"Hello"}']) {
-    await assert.rejects(completeReply([voice], settings, signal(), async () => Response.json({ choices: [{ message: { content } }] })));
-  }
+});
+
+test('text follow-ups preserve earlier audio context and honor the selected model', async () => {
+  const audio = { data: 'UklGRg==', format: 'wav' };
+  const history = [{ ...user, audio }, { ...user, id: 2, role: 'assistant', text: 'Hello!' }, { ...user, id: 3, text: 'What did I say?' }];
+  await completeReply(history, settings, signal(), async (_url, options) => {
+    const body = JSON.parse(options.body);
+    assert.equal(body.model, settings.model);
+    assert.deepEqual(body.messages[0].content, [{ type: 'input_audio', input_audio: audio }]);
+    assert.equal(body.messages[2].content, 'What did I say?');
+    return Response.json({ choices: [{ message: { content: 'You said hello.' } }] });
+  });
+});
+
+test('retained audio context is bounded independently of text', () => {
+  const large = { data: 'A'.repeat(8 * 1024 * 1024), format: 'wav' };
+  const history = [1, 2, 3].map(id => ({ ...user, id, audio: large }));
+  assert.equal(requestMessages(history).length, 2);
+});
+
+
+test('incompatible selected models surface a provider error without a model switch or retry', async () => {
+  let calls = 0;
+  await assert.rejects(completeReply([{ ...user, audio: { data: 'UklGRg==', format: 'wav' } }], settings, signal(), async (_url, options) => {
+    calls++;
+    assert.equal(JSON.parse(options.body).model, settings.model);
+    return Response.json({ error: { message: 'This model does not support audio input.' } }, { status: 400 });
+  }), /does not support audio/);
+  assert.equal(calls, 1);
 });
