@@ -1,20 +1,25 @@
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from "react";
 import {
-  Keyboard, KeyboardAvoidingView, Platform, Pressable,
-  StyleSheet, Text, View,
-} from 'react-native';
-import { LegendList, type LegendListRef } from '@legendapp/list/react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+  Keyboard,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
+import { LegendList, type LegendListRef } from "@legendapp/list/react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 
-import { AudioMessage } from './AudioWaveform';
-import { AudioComposer } from './AudioComposer';
-import type { ModelSettings } from './openRouter';
-import type { AudioInput, ChatHistory } from './history';
-import { ChatHeader } from './ChatHeader';
-import type { ChatColors } from './theme';
-import { useKeyboardVisible } from './useKeyboardVisible';
-import { screenStyles } from './screenStyles';
-import type { PendingReply } from './ChatController';
+import { AudioMessage } from "./AudioWaveform";
+import { AudioComposer } from "./AudioComposer";
+import type { ModelSettings } from "./openRouter";
+import type { AudioInput, ChatHistory } from "./history";
+import { ChatHeader } from "./ChatHeader";
+import type { ChatColors } from "./theme";
+import { useKeyboardVisible } from "./useKeyboardVisible";
+import { screenStyles } from "./screenStyles";
+import type { PendingReply } from "./ChatController";
 
 type ChatScreenProps = {
   colors: ChatColors;
@@ -36,55 +41,131 @@ type ChatScreenProps = {
   onRetry: () => void;
 };
 
-export function ChatScreen({ colors, visible, history, busy, error, pending, connected, onStop, onRetryReply, onOpenSettings, composerKey, onSend, onNewChat, onOpenHistory, onRetry, settings, onSendAudio }: ChatScreenProps) {
+export function ChatScreen({
+  colors,
+  visible,
+  history,
+  busy,
+  error,
+  pending,
+  connected,
+  onStop,
+  onRetryReply,
+  onOpenSettings,
+  composerKey,
+  onSend,
+  onNewChat,
+  onOpenHistory,
+  onRetry,
+  settings,
+  onSendAudio,
+}: ChatScreenProps) {
   const [scrollRequest, setScrollRequest] = useState(0);
   const keyboardVisible = useKeyboardVisible();
 
   async function sendMessage(text: string) {
     const sent = await onSend(text);
-    if (sent) setScrollRequest(value => value + 1);
+    if (sent) setScrollRequest((value) => value + 1);
     return sent;
   }
   return (
-    <KeyboardAvoidingView style={[styles.screen, { backgroundColor: colors.background }]} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-      <SafeAreaView style={styles.screen} edges={keyboardVisible ? ['top', 'left', 'right'] : undefined}>
+    <KeyboardAvoidingView
+      style={[styles.screen, { backgroundColor: colors.background }]}
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
+    >
+      <SafeAreaView
+        style={styles.screen}
+        edges={keyboardVisible ? ["top", "left", "right"] : undefined}
+      >
         <ChatHeader
           colors={colors}
           mode="chat"
           newChatDisabled={!history || busy || history.activeId === null}
           navigationDisabled={!history || busy}
           onNewChat={onNewChat}
-          onNavigate={() => { Keyboard.dismiss(); onOpenHistory(); }}
-          onSettings={() => { Keyboard.dismiss(); onOpenSettings(); }}
+          onNavigate={() => {
+            Keyboard.dismiss();
+            onOpenHistory();
+          }}
+          onSettings={() => {
+            Keyboard.dismiss();
+            onOpenSettings();
+          }}
         />
         {error !== null && (
           <View>
-            <Text accessibilityRole="alert" style={[styles.error, { color: colors.text }]}>{error}</Text>
+            <Text
+              accessibilityRole="alert"
+              style={[styles.error, { color: colors.text }]}
+            >
+              {error}
+            </Text>
             {history === null && (
-              <Pressable accessibilityRole="button" onPress={onRetry} style={styles.retry}>
-                <Text style={[styles.actionText, { color: colors.text }]}>Try again</Text>
+              <Pressable
+                accessibilityRole="button"
+                onPress={onRetry}
+                style={styles.retry}
+              >
+                <Text style={[styles.actionText, { color: colors.text }]}>
+                  Try again
+                </Text>
               </Pressable>
             )}
           </View>
         )}
-        <MessageList key={history?.activeId ?? 'new'} colors={colors} history={history} scrollRequest={scrollRequest} onRetryReply={onRetryReply} busy={busy || pending !== null} />
-        {!connected && <Pressable accessibilityRole="button" onPress={onOpenSettings} style={styles.retry}>
-          <Text style={[styles.actionText, { color: colors.text }]}>Connect OpenRouter</Text>
-        </Pressable>}
-        {pending !== null && pending.chatId !== history?.activeId && <Text style={[styles.error, { color: colors.muted }]}>Replying in another chat. You can stop it here.</Text>}
-        <AudioComposer key={composerKey} colors={colors} visible={visible} disabled={!history || !connected || busy}
-          pending={pending !== null} onSendText={sendMessage} onStopReply={onStop}
-          settings={settings} onSend={async (audio, chosen) => {
+        <MessageList
+          key={history?.activeId ?? "new"}
+          colors={colors}
+          history={history}
+          scrollRequest={scrollRequest}
+          onRetryReply={onRetryReply}
+          busy={busy || pending !== null}
+        />
+        {!connected && (
+          <Pressable
+            accessibilityRole="button"
+            onPress={onOpenSettings}
+            style={styles.retry}
+          >
+            <Text style={[styles.actionText, { color: colors.text }]}>
+              Connect OpenRouter
+            </Text>
+          </Pressable>
+        )}
+        {pending !== null && pending.chatId !== history?.activeId && (
+          <Text style={[styles.error, { color: colors.muted }]}>
+            Replying in another chat. You can stop it here.
+          </Text>
+        )}
+        <AudioComposer
+          key={composerKey}
+          colors={colors}
+          visible={visible}
+          disabled={!history || !connected || busy}
+          pending={pending !== null}
+          onSendText={sendMessage}
+          onStopReply={onStop}
+          settings={settings}
+          onSend={async (audio, chosen) => {
             const sent = await onSendAudio(audio, chosen);
-            if (sent) setScrollRequest(value => value + 1);
+            if (sent) setScrollRequest((value) => value + 1);
             return sent;
-          }} />
+          }}
+        />
       </SafeAreaView>
     </KeyboardAvoidingView>
   );
 }
 
-function MessageList({ colors, history, scrollRequest, onRetryReply, busy }: Pick<ChatScreenProps, 'colors' | 'history' | 'onRetryReply' | 'busy'> & { scrollRequest: number }) {
+function MessageList({
+  colors,
+  history,
+  scrollRequest,
+  onRetryReply,
+  busy,
+}: Pick<ChatScreenProps, "colors" | "history" | "onRetryReply" | "busy"> & {
+  scrollRequest: number;
+}) {
   const listRef = useRef<LegendListRef>(null);
   const handledSendRef = useRef(scrollRequest);
 
@@ -105,32 +186,73 @@ function MessageList({ colors, history, scrollRequest, onRetryReply, busy }: Pic
       maintainVisibleContentPosition
       recycleItems
       ItemSeparatorComponent={MessageSeparator}
-      keyExtractor={message => String(message.id)}
+      keyExtractor={(message) => String(message.id)}
       style={styles.screen}
       contentContainerStyle={styles.messages}
       keyboardShouldPersistTaps="handled"
       keyboardDismissMode="on-drag"
       ListEmptyComponent={
         <View style={styles.empty}>
-          <Text style={[styles.emptyTitle, { color: colors.text }]}>{history === null ? 'Opening your chats…' : 'What’s on your mind?'}</Text>
+          <Text style={[styles.emptyTitle, { color: colors.text }]}>
+            {history === null ? "Opening your chats…" : "What’s on your mind?"}
+          </Text>
           <Text style={[styles.emptyHint, { color: colors.muted }]}>
-            {history === null ? 'Your conversations stay on this phone.' : 'Send a message to start a conversation.'}
+            {history === null
+              ? "Your conversations stay on this phone."
+              : "Send a message to start a conversation."}
           </Text>
         </View>
       }
       renderItem={({ item }) => (
-        <View style={[styles.message, item.role === 'user' && styles.userMessage]}>
-          <Text style={[styles.author, { color: colors.muted }]}>{item.role === 'user' ? 'You' : 'AGSpeak'}</Text>
-          <View style={item.role === 'user' && [styles.bubble, { backgroundColor: colors.bubble }]}>
-            {item.audio ? <AudioMessage audio={item.audio} colors={colors} /> : <Text selectable style={[styles.messageText, { color: colors.text }]}>
-              {item.status === 'pending' ? 'Thinking…' : item.text || (item.status === 'cancelled' ? 'Reply stopped.' : 'Reply failed.')}
-            </Text>}
-            {(item.status === 'failed' || item.status === 'cancelled') && (
+        <View
+          style={[styles.message, item.role === "user" && styles.userMessage]}
+        >
+          <Text style={[styles.author, { color: colors.muted }]}>
+            {item.role === "user" ? "You" : "AGSpeak"}
+          </Text>
+          <View
+            style={
+              item.role === "user" && [
+                styles.bubble,
+                { backgroundColor: colors.bubble },
+              ]
+            }
+          >
+            {item.audio ? (
+              <AudioMessage audio={item.audio} colors={colors} />
+            ) : (
+              <Text
+                selectable
+                style={[styles.messageText, { color: colors.text }]}
+              >
+                {item.status === "pending"
+                  ? "Thinking…"
+                  : item.text ||
+                    (item.status === "cancelled"
+                      ? "Reply stopped."
+                      : "Reply failed.")}
+              </Text>
+            )}
+            {(item.status === "failed" || item.status === "cancelled") && (
               <View>
-                {item.error !== null && <Text style={[styles.replyError, { color: colors.muted }]}>{item.error}</Text>}
-                {item.id === history?.messages.at(-1)?.id && <Pressable accessibilityRole="button" accessibilityLabel="Retry reply" disabled={busy} onPress={() => onRetryReply(item.id)} style={styles.retryReply}>
-                  <Text style={[styles.actionText, { color: colors.text }]}>Retry</Text>
-                </Pressable>}
+                {item.error !== null && (
+                  <Text style={[styles.replyError, { color: colors.muted }]}>
+                    {item.error}
+                  </Text>
+                )}
+                {item.id === history?.messages.at(-1)?.id && (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Retry reply"
+                    disabled={busy}
+                    onPress={() => onRetryReply(item.id)}
+                    style={styles.retryReply}
+                  >
+                    <Text style={[styles.actionText, { color: colors.text }]}>
+                      Retry
+                    </Text>
+                  </Pressable>
+                )}
               </View>
             )}
           </View>
@@ -146,15 +268,15 @@ function MessageSeparator() {
 
 const styles = StyleSheet.create({
   ...screenStyles,
-  retry: { minHeight: 48, justifyContent: 'center', paddingHorizontal: 20 },
-  actionText: { fontSize: 14, fontWeight: '500' },
+  retry: { minHeight: 48, justifyContent: "center", paddingHorizontal: 20 },
+  actionText: { fontSize: 14, fontWeight: "500" },
   messages: { padding: 20 },
   replyError: { fontSize: 14, lineHeight: 21, marginTop: 8 },
-  retryReply: { minHeight: 48, justifyContent: 'center' },
+  retryReply: { minHeight: 48, justifyContent: "center" },
   separator: { height: 24 },
-  message: { alignSelf: 'flex-start', maxWidth: '92%', gap: 7 },
-  userMessage: { alignSelf: 'flex-end', alignItems: 'flex-end' },
-  author: { fontSize: 12, fontWeight: '500' },
+  message: { alignSelf: "flex-start", maxWidth: "92%", gap: 7 },
+  userMessage: { alignSelf: "flex-end", alignItems: "flex-end" },
+  author: { fontSize: 12, fontWeight: "500" },
   bubble: { borderRadius: 18, paddingHorizontal: 16, paddingVertical: 12 },
   messageText: { fontSize: 17, lineHeight: 26 },
 });

@@ -1,0 +1,22 @@
+node_modules
+
+# Generated native projects and build output.
+android
+ios
+.expo
+.kotlin
+dist
+web-build
+artifacts
+.metro-health-check*
+expo-env.d.ts
+
+# Credentials and signing material.
+.signing
+.env*
+
+# Package-manager-owned output.
+pnpm-lock.yaml
+
+# README changes require an explicit request.
+README.md

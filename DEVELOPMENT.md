@@ -324,10 +324,16 @@ The equivalent command inside `reactnative/` is `pnpm android:usb`. The command
 checks the phone before building and pins installation to that device's serial;
 no phone, an unauthorized phone, or multiple USB devices produces an error.
 
-`make check` runs the Android app's ESLint and TypeScript checks; `make lint` runs
-ESLint alone. Both lint errors and warnings fail the check, and `make android`
+`make check` runs the app's formatting, ESLint, TypeScript, and offline test
+checks; `make lint` runs ESLint alone. Both lint errors and warnings fail the check, and `make android`
 runs the checks before building or installing. Inside `reactnative/`, use
-`pnpm lint:fix` for automatic fixes.
+`pnpm lint:fix` for automatic lint fixes. `make format` runs Prettier over the
+React Native project; `make format-check` checks formatting without writing.
+The equivalent package scripts are `pnpm format` and `pnpm format:check`.
+Prettier uses an 80-column print width and its default style. Generated native
+projects, build output, signing files, environment files, the package-manager
+lockfile, and README files are excluded. `pnpm check` includes the formatting
+check before lint, TypeScript, and offline tests.
 
 The ESLint 10 flat config uses `@eslint-react/eslint-plugin`, React's official
 hooks plugin (including Compiler diagnostics), `eslint-plugin-import-x`, and

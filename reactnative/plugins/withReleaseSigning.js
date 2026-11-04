@@ -1,8 +1,8 @@
-const { withAppBuildGradle } = require('expo/config-plugins');
+const { withAppBuildGradle } = require("expo/config-plugins");
 
 module.exports = function withReleaseSigning(config) {
-  return withAppBuildGradle(config, config => {
-    const marker = '// AGSpeak release signing';
+  return withAppBuildGradle(config, (config) => {
+    const marker = "// AGSpeak release signing";
     if (!config.modResults.contents.includes(marker)) {
       config.modResults.contents += `
 ${marker}
@@ -22,7 +22,9 @@ if (releaseSigningFile.exists()) {
 }
 `;
     }
-    if (!config.modResults.contents.includes('// AGSpeak development identity')) {
+    if (
+      !config.modResults.contents.includes("// AGSpeak development identity")
+    ) {
       config.modResults.contents += `
 // AGSpeak development identity
 android.buildTypes.debug {

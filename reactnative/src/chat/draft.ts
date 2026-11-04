@@ -15,7 +15,7 @@ export async function submitDraft(
 ) {
   const original = draft.text;
   if (!original.trim()) return false;
-  editDraft(draft, '');
+  editDraft(draft, "");
   const clearedVersion = draft.version;
   clear();
   let saved = false;
