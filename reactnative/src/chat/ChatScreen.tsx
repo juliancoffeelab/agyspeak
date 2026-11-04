@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import {
   Keyboard, KeyboardAvoidingView, Platform, Pressable,
   StyleSheet, Text, View,
@@ -12,6 +12,7 @@ import type { ModelSettings } from './openRouter';
 import type { AudioInput, ChatHistory } from './history';
 import { ChatHeader } from './ChatHeader';
 import type { ChatColors } from './theme';
+import { useKeyboardVisible } from './useKeyboardVisible';
 import { screenStyles } from './screenStyles';
 import type { PendingReply } from './ChatController';
 
@@ -37,13 +38,7 @@ type ChatScreenProps = {
 
 export function ChatScreen({ colors, visible, history, busy, error, pending, connected, onStop, onRetryReply, onOpenSettings, composerKey, onSend, onNewChat, onOpenHistory, onRetry, settings, onSendAudio }: ChatScreenProps) {
   const [scrollRequest, setScrollRequest] = useState(0);
-  const [keyboardVisible, setKeyboardVisible] = useState(() => Keyboard.isVisible());
-
-  useEffect(() => {
-    const show = Keyboard.addListener('keyboardDidShow', () => setKeyboardVisible(true));
-    const hide = Keyboard.addListener('keyboardDidHide', () => setKeyboardVisible(false));
-    return () => { show.remove(); hide.remove(); };
-  }, []);
+  const keyboardVisible = useKeyboardVisible();
 
   async function sendMessage(text: string) {
     const sent = await onSend(text);

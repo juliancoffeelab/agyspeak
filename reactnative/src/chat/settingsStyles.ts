@@ -1,0 +1,24 @@
+import { StyleSheet } from 'react-native';
+
+export const settingsStyles = StyleSheet.create({
+  screen: { flex: 1 },
+  body: { padding: 20, gap: 24 },
+  section: { gap: 12 },
+  sectionHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  label: { fontSize: 18, fontWeight: '600' },
+  iconButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  routerSection: { borderTopWidth: 1, paddingTop: 16 },
+  modelSummary: { height: 42 },
+  metrics: { flexDirection: 'row', gap: 12, marginBottom: 8 },
+  metric: { flex: 1, gap: 4 },
+  amount: { fontSize: 18, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  suggestion: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth },
+  modelName: { flex: 1, gap: 4 },
+  fieldHeading: { flexDirection: 'row', alignItems: 'center', gap: 12, height: 25 },
+  fieldLabel: { fontSize: 14, fontWeight: '600' },
+  spendError: { flex: 1, fontSize: 12, textAlign: 'right' },
+  input: { borderWidth: 1, borderRadius: 12, padding: 14, minHeight: 48, fontSize: 16 },
+  actions: { flexDirection: 'row', alignItems: 'center' },
+  action: { paddingHorizontal: 12, minHeight: 48, justifyContent: 'center' },
+  hint: { fontSize: 14, lineHeight: 21 },
+});

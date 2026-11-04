@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { queryClient } from './src/chat/queryClient';
 import { StatusBar } from 'expo-status-bar';
 import { Alert, useColorScheme } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -39,6 +41,7 @@ export default function App() {
   }
 
   return (
+    <QueryClientProvider client={queryClient}>
     <SafeAreaProvider>
       <StatusBar style={dark ? 'light' : 'dark'} />
       <ChatScreen
@@ -53,7 +56,7 @@ export default function App() {
         onSendAudio={sendAudio}
         onStop={() => { void stop(); }}
         onRetryReply={id => { void retryReply(id, model.settings); }}
-        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenSettings={() => { if (model.ready) setSettingsOpen(true); }}
         composerKey={composerKey}
         onSend={text => send(text, model.settings)}
         onNewChat={() => { void openChat(null); }}
@@ -70,9 +73,10 @@ export default function App() {
         onClose={() => setHistoryOpen(false)}
         onOpen={id => { void openChat(id); }}
         onDelete={deleteChat}
-        onSettings={() => setSettingsOpen(true)}
+        onSettings={() => { if (model.ready) setSettingsOpen(true); }}
       />
-      {settingsOpen && <SettingsScreen colors={colors} initial={model.settings} onSave={model.save} onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && model.ready && <SettingsScreen colors={colors} initial={model.settings} onSaveKey={model.saveKey} onSaveModel={model.saveModel} onClose={() => setSettingsOpen(false)} />}
     </SafeAreaProvider>
+    </QueryClientProvider>
   );
 }

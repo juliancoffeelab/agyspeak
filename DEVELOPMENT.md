@@ -208,8 +208,60 @@ of the Python application's ACP runtime.
 The shared header keeps New chat (square with pen), History (folder) and Settings icons in fixed
 positions on chat and history screens. The History icon toggles that view.
 Settings replaces those actions with a Close icon in the Settings position;
-closing or saving returns to the screen that opened it. The key scanner uses
+closing returns to the screen that opened it. The key scanner uses
 the same close position and returns to Settings.
+
+Settings groups model selection above OpenRouter credentials and spending.
+`ModelPicker` owns search, dismissal, and model autosave; `OpenRouterSection`
+owns key entry, confirmation, scanning, and spending. Selecting a suggestion,
+leaving the model field, or closing Settings commits the model immediately.
+Save is a text action beside Paste key, Scan QR, and Clear; it saves only the
+API key and leaves Settings open. Changing an existing key uses React Native's
+cross-platform native alert with Keep current key / Replace key actions.
+Keeping the current key (or dismissing the alert) restores the saved key in the
+field. Removing a saved key has a corresponding Remove key confirmation.
+First-time key entry and unchanged keys do not need confirmation.
+
+Only the API key is stored in SecureStore. The selected model uses Expo SQLite's
+cross-platform key-value preferences. Startup migration copies the previous
+combined record into those separate destinations, favoring existing new-format
+values, and deletes the old record only after both writes succeed. Interrupted
+migration can retry without losing either value. Preference writes are queued
+so rapid model selections persist in order.
+The model picker searches a compact, on-device catalog from `GET /models`;
+the first visit downloads it, later visits use the saved file, and the refresh
+icon replaces it explicitly. Audio support comes from the catalog's input
+modalities. Suggestions show cached input/output token prices per million
+tokens. Tapping outside the picker or finishing keyboard input dismisses its
+suggestions and keeps the entered model ID; blank input falls back to
+`openrouter/free` and autosaves that selection. Custom model IDs remain accepted. Catalog refresh failures retain
+the existing list. Catalog storage validates a versioned list of normalized
+`RouterModel` records and migrates the earlier provider-shaped cache locally.
+No catalog data is added to secure key storage.
+
+Spending uses `GET /key` for daily/monthly usage and the key's remaining cap.
+`GET /credits` is attempted with the same key: if allowed, the remaining account
+balance replaces the key allowance and is labeled accordingly. If that endpoint
+is unavailable, an uncapped key shows “No cap”, never an invented wallet balance.
+TanStack Query owns metadata requests, cancellation, and in-memory caching.
+Spending always uses the saved key. Typing, Paste, Scan, and leaving the field
+only edit its draft; they leave the current stats visible and make no requests
+for the replacement. The spending query switches keys only after a confirmed
+save succeeds. Empty or malformed saved keys issue no requests.
+The spending hook exposes empty, invalid, loading, error, and ready
+states in the same fixed layout. Rejected credentials (401/403 from `GET /key`)
+produce the invalid-key state and hide cached stats; a failed account-credits
+permission check still falls back to key allowance. Network failures retain the
+last successful stats. Spending stays fresh for 30 seconds and retains its last successful values while
+refreshing or after a refresh failure; it is isolated per API key and never
+persisted. Only the public model catalog is written to disk. Loading indicators
+replace the refresh icons, and error feedback uses existing fixed-height slots,
+so loading and refreshes do not insert rows into the form. Settings cannot open
+until saved credentials/model preferences have finished loading.
+Keyboard visibility is a shared `useSyncExternalStore` subscription. The Settings
+modal drops the bottom safe-area inset while typing
+so its scroll viewport meets the keyboard. Keyboard avoidance remains explicit
+on both platforms. These metadata requests do not submit inference.
 
 The composer owns its draft locally. Its uncontrolled native `TextInput` reports
 edits into a ref; React state only tracks whether there is sendable text. Typing
