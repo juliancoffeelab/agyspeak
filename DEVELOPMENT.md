@@ -215,8 +215,10 @@ Settings groups model selection above OpenRouter credentials and spending.
 `ModelPicker` owns search, dismissal, and model autosave; `OpenRouterSection`
 owns key entry, confirmation, scanning, and spending. Selecting a suggestion,
 leaving the model field, or closing Settings commits the model immediately.
-Save is a text action beside Paste key, Scan QR, and Clear; it saves only the
-API key and leaves Settings open. Changing an existing key uses React Native's
+Save is a text action beside Paste key, Scan QR, and Restore; it saves only the
+API key and leaves Settings open. Restore discards key edits and validation
+errors, restoring the saved key without writing storage. It is disabled when
+there is no saved key, no draft change or error to discard, or a save is pending. Changing an existing key uses React Native's
 cross-platform native alert with Keep current key / Replace key actions.
 Keeping the current key (or dismissing the alert) restores the saved key in the
 field. Removing a saved key has a corresponding Remove key confirmation.

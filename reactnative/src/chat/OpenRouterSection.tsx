@@ -18,6 +18,7 @@ export function OpenRouterSection({ colors, savedKey, onSave }: {
   const [scanning, setScanning] = useState(false);
   const [keyError, setKeyError] = useState<string | null>(null);
   const spending = useRouterUsage(savedKey);
+  const canRestore = Boolean(savedKey) && !saving && (apiKey !== savedKey || keyError !== null);
   const status = keyError ?? (spending.state === 'invalid' ? 'Invalid saved key'
     : spending.error ? 'Spending refresh failed' : '');
 
@@ -88,7 +89,7 @@ export function OpenRouterSection({ colors, savedKey, onSave }: {
       <View style={styles.actions}>
         <Pressable accessibilityRole="button" onPress={() => { void paste(); }} style={styles.action}><Text style={{ color: colors.text }}>Paste key</Text></Pressable>
         <Pressable accessibilityRole="button" onPress={() => { Keyboard.dismiss(); setScanning(true); }} style={styles.action}><Text style={{ color: colors.text }}>Scan QR</Text></Pressable>
-        <Pressable accessibilityRole="button" onPress={() => acceptKey('')} style={styles.action}><Text style={{ color: colors.muted }}>Clear</Text></Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel="Restore saved API key" disabled={!canRestore} onPress={() => acceptKey(savedKey)} style={[styles.action, { opacity: canRestore ? 1 : 0.4 }]}><Text style={{ color: colors.text }}>Restore</Text></Pressable>
         <Pressable accessibilityRole="button" disabled={saving} onPress={() => { void save(); }} style={[styles.action, { opacity: saving ? 0.5 : 1 }]}><Text style={{ color: colors.text, fontWeight: '600' }}>{saving ? 'Saving…' : 'Save'}</Text></Pressable>
       </View>
       {scanning && <Modal visible animationType="slide" onRequestClose={() => setScanning(false)}>
