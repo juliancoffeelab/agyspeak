@@ -2,6 +2,7 @@ import { useState } from 'react';
 import * as Clipboard from 'expo-clipboard';
 import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import { ChatHeader } from './ChatHeader';
 import { KeyScanner } from './KeyScanner';
 import { parseKeyInput } from './settings';
 import type { ModelSettings } from './openRouter';
@@ -34,15 +35,12 @@ export function SettingsScreen({ colors, initial, onSave, onClose }: SettingsScr
   }
 
   return (
-    <Modal visible animationType="slide" onRequestClose={onClose}>
+    <Modal visible animationType="slide" onRequestClose={() => { if (!saving) { if (scanning) setScanning(false); else onClose(); } }}>
       <SafeAreaProvider>
         {scanning ? <KeyScanner colors={colors} onRead={key => { setApiKey(key); setScanning(false); setError(null); }} onClose={() => setScanning(false)} /> : (
           <KeyboardAvoidingView style={[styles.screen, { backgroundColor: colors.background }]} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
             <SafeAreaView style={styles.screen}>
-              <View style={styles.header}>
-                <Text style={[styles.title, { color: colors.text }]}>Settings</Text>
-                <Pressable accessibilityRole="button" onPress={onClose} disabled={saving} style={styles.action}><Text style={{ color: colors.text }}>Close</Text></Pressable>
-              </View>
+              <ChatHeader mode="settings" colors={colors} onClose={onClose} closeDisabled={saving} />
               <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
                 <Text style={[styles.label, { color: colors.text }]}>OpenRouter key</Text>
                 <TextInput accessibilityLabel="OpenRouter API key" value={apiKey} onChangeText={setApiKey} secureTextEntry autoCapitalize="none" autoCorrect={false}
@@ -77,8 +75,6 @@ export function SettingsScreen({ colors, initial, onSave, onClose }: SettingsScr
 
 const styles = StyleSheet.create({
   screen: { flex: 1 },
-  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 12 },
-  title: { flex: 1, fontSize: 22, fontWeight: '700' },
   body: { padding: 20, gap: 12 },
   label: { fontSize: 16, fontWeight: '600', marginTop: 12 },
   input: { borderWidth: 1, borderRadius: 12, padding: 14, minHeight: 48, fontSize: 16 },

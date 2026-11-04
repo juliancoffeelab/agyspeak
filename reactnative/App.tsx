@@ -61,7 +61,7 @@ export default function App() {
         onRetry={retry}
       />
       <HistoryScreen
-        visible={historyOpen}
+        visible={historyOpen && !settingsOpen}
         colors={colors}
         chats={history?.chats ?? []}
         activeId={history?.activeId ?? null}
@@ -70,7 +70,7 @@ export default function App() {
         onClose={() => setHistoryOpen(false)}
         onOpen={id => { void openChat(id); }}
         onDelete={deleteChat}
-        onSettings={() => { setHistoryOpen(false); setSettingsOpen(true); }}
+        onSettings={() => setSettingsOpen(true)}
       />
       {settingsOpen && <SettingsScreen colors={colors} initial={model.settings} onSave={model.save} onClose={() => setSettingsOpen(false)} />}
     </SafeAreaProvider>

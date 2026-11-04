@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { ChatHeader } from './ChatHeader';
 import { parseKeyInput } from './settings';
 import type { ChatColors } from './theme';
 
@@ -11,10 +12,7 @@ export function KeyScanner({ colors, onRead, onClose }: { colors: ChatColors; on
   const scannedRef = useRef(false);
   return (
     <SafeAreaView style={[styles.screen, { backgroundColor: colors.background }]}>
-      <View style={styles.header}>
-        <Text style={[styles.title, { color: colors.text }]}>Scan key</Text>
-        <Pressable accessibilityRole="button" onPress={onClose} style={styles.button}><Text style={{ color: colors.text }}>Cancel</Text></Pressable>
-      </View>
+      <ChatHeader mode="settings" title="Scan key" colors={colors} onClose={onClose} />
       {permission?.granted ? (
         <CameraView
           style={styles.screen}
@@ -46,8 +44,6 @@ export function KeyScanner({ colors, onRead, onClose }: { colors: ChatColors; on
 
 const styles = StyleSheet.create({
   screen: { flex: 1 },
-  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 12 },
-  title: { flex: 1, fontSize: 22, fontWeight: '600' },
   button: { padding: 16, minHeight: 48, justifyContent: 'center' },
   explanation: { flex: 1, justifyContent: 'center', padding: 20 },
   hint: { fontSize: 15, lineHeight: 23, padding: 20 },

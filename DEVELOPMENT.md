@@ -205,6 +205,12 @@ The independent Expo/React Native app lives in `reactnative/`. It uses OpenRoute
 API keys in device secure storage and conversations in SQLite. It is independent
 of the Python application's ACP runtime.
 
+The shared header keeps New chat (square with pen), History (folder) and Settings icons in fixed
+positions on chat and history screens. The History icon toggles that view.
+Settings replaces those actions with a Close icon in the Settings position;
+closing or saving returns to the screen that opened it. The key scanner uses
+the same close position and returns to Settings.
+
 The composer owns its draft locally. Its uncontrolled native `TextInput` reports
 edits into a ref; React state only tracks whether there is sendable text. Typing
 does not update `App` or the message list. The input stays mounted during audio

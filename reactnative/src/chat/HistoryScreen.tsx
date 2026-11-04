@@ -26,10 +26,11 @@ export function HistoryScreen({ visible, colors, chats, activeId, busy, error, o
         <SafeAreaView style={[styles.screen, { backgroundColor: colors.background }]}>
           <ChatHeader
             colors={colors}
-            navigation="close"
+            mode="history"
             newChatDisabled={busy}
             onNewChat={() => onOpen(null)}
             onNavigate={onClose}
+            onSettings={onSettings}
           />
           {error !== null && <Text accessibilityRole="alert" style={[styles.error, { color: colors.text }]}>{error}</Text>}
           <FlatList
@@ -70,9 +71,7 @@ export function HistoryScreen({ visible, colors, chats, activeId, busy, error, o
               </View>
             )}
           />
-          <Pressable accessibilityRole="button" accessibilityLabel="Open settings" onPress={onSettings} style={styles.settings}>
-            <Text style={[styles.deleteText, { color: colors.text }]}>Settings</Text>
-          </Pressable>
+
         </SafeAreaView>
       </SafeAreaProvider>
     </Modal>
@@ -81,7 +80,6 @@ export function HistoryScreen({ visible, colors, chats, activeId, busy, error, o
 
 const styles = StyleSheet.create({
   ...screenStyles,
-  settings: { minHeight: 56, justifyContent: 'center', paddingHorizontal: 20 },
   historyList: { flexGrow: 1 },
   historyEmpty: { paddingHorizontal: 20 },
   historyRow: { flexDirection: 'row', alignItems: 'center', borderBottomWidth: StyleSheet.hairlineWidth },

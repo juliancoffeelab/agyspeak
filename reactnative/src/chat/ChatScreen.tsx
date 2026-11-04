@@ -55,11 +55,12 @@ export function ChatScreen({ colors, visible, history, busy, error, pending, con
       <SafeAreaView style={styles.screen} edges={keyboardVisible ? ['top', 'left', 'right'] : undefined}>
         <ChatHeader
           colors={colors}
-          navigation="history"
+          mode="chat"
           newChatDisabled={!history || busy || history.activeId === null}
           navigationDisabled={!history || busy}
           onNewChat={onNewChat}
           onNavigate={() => { Keyboard.dismiss(); onOpenHistory(); }}
+          onSettings={() => { Keyboard.dismiss(); onOpenSettings(); }}
         />
         {error !== null && (
           <View>
