@@ -343,7 +343,7 @@ function MessageList({
               item.text.trim() && (
                 <ResponseActions
                   id={item.id}
-                  text={item.text}
+                  markdown={item.text}
                   elapsedMillis={item.elapsedMillis}
                   colors={colors}
                 />

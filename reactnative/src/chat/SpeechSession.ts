@@ -1,12 +1,12 @@
 import type { SpeechLanguage, SpeechSelection } from "./speechLanguage";
-import { speechText } from "./speechText.ts";
+import { markdownToSpeechText } from "./speechText.ts";
 
 export type SpeechOutcome = "finished" | "stopped";
 
 type SpeechPort = {
   prepare?: (language?: SpeechLanguage) => Promise<SpeechSelection | void>;
   stop: () => Promise<void>;
-  speak: (text: string, selection?: SpeechSelection) => Promise<SpeechOutcome>;
+  speak: (prose: string, selection?: SpeechSelection) => Promise<SpeechOutcome>;
   onError: (message: string) => void;
 };
 export class SpeechUnavailableError extends Error {}
@@ -87,13 +87,13 @@ export class SpeechSession {
     this.publish({ languages });
     if (this.state.messageId === messageId) void this.stop();
   }
-  async toggle(messageId: number, text: string) {
+  async toggle(messageId: number, markdown: string) {
     if (this.state.recording) return;
     if (this.state.messageId === messageId) {
       await this.stop();
       return;
     }
-    const prose = speechText(text);
+    const prose = markdownToSpeechText(markdown);
     if (!prose) {
       this.port.onError("There’s no spoken text in this response.");
       return;

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { PromiseSpeech } from "../src/chat/PromiseSpeech.ts";
 import { SpeechSession } from "../src/chat/SpeechSession.ts";
-import { speechText, speechChunks } from "../src/chat/speechText.ts";
+import { markdownToSpeechText, speechChunks } from "../src/chat/speechText.ts";
 
 function setup(stop = async () => {}, options = {}) {
   const spoken = [],
@@ -31,16 +31,16 @@ async function start(speech, ...args) {
 test("spoken text keeps prose, inline code, link labels and Unicode without Markdown syntax or fenced code", () => {
   const source =
     "# Hello **world**\n\n- [a *nested* link](https://example.com/a_(b))\n- `value` &amp; svenska åäö\n\n```js\nsecretCode();\n```\n\n> Last paragraph.";
-  const result = speechText(source);
+  const result = markdownToSpeechText(source);
   assert.match(result, /Hello world/);
   assert.match(result, /a nested link/);
   assert.match(result, /value & svenska åäö/);
   assert.match(result, /Last paragraph/);
   assert.doesNotMatch(result, /https:|secretCode|```|\*\*/);
-  assert.equal(speechText("~~~python\nunfinished code"), "");
-  assert.equal(speechText("    indented code"), "");
+  assert.equal(markdownToSpeechText("~~~python\nunfinished code"), "");
+  assert.equal(markdownToSpeechText("    indented code"), "");
   assert.equal(
-    speechText("<script>hidden()</script>\n\nReadable."),
+    markdownToSpeechText("<script>hidden()</script>\n\nReadable."),
     "Readable.",
   );
 });
@@ -326,7 +326,7 @@ test("session sends complete cleaned prose through one engine call", async () =>
   const playing = speech.toggle(1, text);
   await tick();
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].text, speechText(text));
+  assert.equal(calls[0].text, markdownToSpeechText(text));
   assert.ok(calls[0].text.length > 3000);
   assert.deepEqual(calls[0].selection, { language: "sv-SE" });
   assert.equal(speech.getSnapshot().messageId, 1);

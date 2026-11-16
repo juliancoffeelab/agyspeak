@@ -5,7 +5,7 @@ import type { SpeechSelection } from "./speechLanguage";
 type NativeSpeech = {
   maxLength: number;
   speak: (
-    text: string,
+    prose: string,
     selection: SpeechSelection | undefined,
     callbacks: {
       onDone: () => void;
@@ -26,7 +26,7 @@ export class PromiseSpeech {
   }
 
   speak = async (
-    text: string,
+    prose: string,
     selection?: SpeechSelection,
   ): Promise<SpeechOutcome> => {
     this.pending?.stop();
@@ -40,7 +40,7 @@ export class PromiseSpeech {
     };
     this.pending = job;
     try {
-      for (const chunk of speechChunks(text, this.native.maxLength)) {
+      for (const chunk of speechChunks(prose, this.native.maxLength)) {
         if (stopped) return "stopped";
         const outcome = await new Promise<SpeechOutcome>((resolve, reject) => {
           let settled = false;

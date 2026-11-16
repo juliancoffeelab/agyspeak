@@ -13,12 +13,12 @@ import type { ChatColors } from "./theme";
 
 export const ResponseActions = memo(function ResponseActions({
   id,
-  text,
+  markdown,
   elapsedMillis,
   colors,
 }: {
   id: number;
-  text: string;
+  markdown: string;
   elapsedMillis?: number | null;
   colors: ChatColors;
 }) {
@@ -50,7 +50,7 @@ export const ResponseActions = memo(function ResponseActions({
   }, []);
   async function copy() {
     try {
-      await Clipboard.setStringAsync(text);
+      await Clipboard.setStringAsync(markdown);
       if (!aliveRef.current) return;
       setCopiedId(id);
       if (timerRef.current) clearTimeout(timerRef.current);
@@ -78,7 +78,7 @@ export const ResponseActions = memo(function ResponseActions({
         disabled={recording}
         onPress={() => {
           if (speaking) void replySpeech.stop();
-          else void replySpeech.toggle(id, text);
+          else void replySpeech.toggle(id, markdown);
         }}
         style={[styles.button, { opacity: recording ? 0.35 : 1 }]}
       >

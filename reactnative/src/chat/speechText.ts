@@ -1,6 +1,6 @@
 import MarkdownParser, { type Token } from "markdown-it";
 
-const markdown = new MarkdownParser({ html: true, linkify: false });
+const markdownParser = new MarkdownParser({ html: true, linkify: false });
 function words(tokens: Token[]): string {
   return tokens
     .map((token) => {
@@ -29,17 +29,17 @@ function words(tokens: Token[]): string {
     })
     .join("");
 }
-export function speechText(text: string): string {
-  return words(markdown.parse(text, {}))
+export function markdownToSpeechText(markdown: string): string {
+  return words(markdownParser.parse(markdown, {}))
     .replace(/[ \t]+/g, " ")
     .replace(/ *\n */g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
-export function speechChunks(text: string, maxLength: number): string[] {
+export function speechChunks(prose: string, maxLength: number): string[] {
   const limit = Math.max(1, Math.floor(Math.min(maxLength, 3000)));
   const chunks: string[] = [];
-  let remaining = text.trim();
+  let remaining = prose.trim();
   while (remaining.length > limit) {
     const window = remaining.slice(0, limit);
     const boundary = Math.max(

@@ -30,8 +30,8 @@ async function prepareVoice(language?: SpeechLanguage) {
 const playback = new PromiseSpeech({
   maxLength: Speech.maxSpeechInputLength,
   stop: () => Speech.stop(),
-  speak: (text, selection, callbacks) =>
-    Speech.speak(text, {
+  speak: (prose, selection, callbacks) =>
+    Speech.speak(prose, {
       ...callbacks,
       ...selection,
       // Expo Android passes language to Locale.Builder.setLanguage(), which needs
