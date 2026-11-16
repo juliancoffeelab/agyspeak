@@ -62,12 +62,12 @@ test("version-six upgrade preserves existing messages and drafts", async () => {
     await store.beginReply("old", "existing message", "text", 1);
     await store.saveDraft("old", "existing draft");
     sqlite.exec(
-      "DROP TABLE draft_photos; DROP TABLE photos; PRAGMA user_version = 6",
+      "ALTER TABLE chats DROP COLUMN selected_model; ALTER TABLE app_state DROP COLUMN draft_model; DROP TABLE draft_photos; DROP TABLE photos; PRAGMA user_version = 6",
     );
     await store.initialize();
     assert.equal((await store.read()).messages[0].text, "existing message");
     assert.equal(await store.readDraft("old"), "existing draft");
-    assert.equal(sqlite.prepare("PRAGMA user_version").get().user_version, 8);
+    assert.equal(sqlite.prepare("PRAGMA user_version").get().user_version, 9);
   } finally {
     sqlite.close();
   }
@@ -170,6 +170,7 @@ test("unsupported photo sends and follow-ups preserve drafts without inference",
     );
     await new Promise((resolve) => setTimeout(resolve, 10));
     assert.equal(calls, 1);
+    await controller.chooseModel("text");
     assert.equal(await controller.send("follow-up", settings), false);
     assert.equal(calls, 1);
     assert.equal(controller.getSnapshot().history.messages.length, 2);
@@ -206,9 +207,11 @@ test("photo retry keeps the original attachment and blocks incompatible models b
     (model) => (model === "vision" ? null : "No image support"),
   );
   try {
+    await controller.chooseModel("text");
     assert.equal(await controller.retryReply(replyId, settings), false);
     assert.equal((await store.read()).messages.at(-1).status, "failed");
     assert.equal(received, undefined);
+    await controller.chooseModel("vision");
     assert.equal(
       await controller.retryReply(replyId, { ...settings, model: "vision" }),
       true,

@@ -60,6 +60,7 @@ export function SettingsScreen({
               >
                 <ModelPicker
                   ref={pickerRef}
+                  label="Default model"
                   colors={colors}
                   initial={initial.model}
                   onSave={onSaveModel}

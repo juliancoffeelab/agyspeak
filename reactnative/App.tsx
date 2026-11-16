@@ -29,6 +29,7 @@ function ChatApp() {
   const {
     history,
     readPhoto,
+    chooseModel,
     draft,
     flushDraft,
     busy,
@@ -44,8 +45,15 @@ function ChatApp() {
   } = useChatHistory();
   const model = useModelSettings();
   const catalog = useModelCatalog();
-  const audioIssue = audioInputIssue(model.settings.model, catalog.models);
-  const imageIssue = imageInputIssue(model.settings.model, catalog.models);
+  const chatSettings = {
+    ...model.settings,
+    model: history?.selectedModel ?? model.settings.model,
+  };
+  const audioIssue = audioInputIssue(chatSettings.model, catalog.models);
+  const imageIssue = imageInputIssue(chatSettings.model, catalog.models);
+  const selectedModelName =
+    catalog.models.find((item) => item.id === chatSettings.model)?.name ??
+    chatSettings.model;
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
 
@@ -84,16 +92,18 @@ function ChatApp() {
         error={error ?? model.error}
         pending={pending}
         connected={model.ready && Boolean(model.settings.apiKey)}
-        settings={model.settings}
+        settings={chatSettings}
         audioIssue={audioIssue}
         imageIssue={imageIssue}
         onSendAudio={sendAudio}
         onReadPhoto={readPhoto}
+        modelName={selectedModelName}
+        onChooseModel={chooseModel}
         onStop={() => {
           void stop();
         }}
         onRetryReply={(id) => {
-          void retryReply(id, model.settings);
+          void retryReply(id, chatSettings);
         }}
         onOpenSettings={() => {
           if (model.ready)
@@ -102,7 +112,7 @@ function ChatApp() {
             });
         }}
         draft={draft}
-        onSend={(text, photos) => send(text, model.settings, photos)}
+        onSend={(text, photos) => send(text, chatSettings, photos)}
         onNewChat={() => {
           void openChat(null);
         }}

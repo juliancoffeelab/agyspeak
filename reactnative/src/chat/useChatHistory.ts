@@ -96,6 +96,8 @@ export function useChatHistory() {
   }, [attempt]);
 
   return {
+    chooseModel: (model: string) =>
+      controllerRef.current?.chooseModel(model) ?? Promise.resolve(false),
     readPhoto: (reference: PhotoReference) =>
       controllerRef.current?.readPhoto(reference) ??
       Promise.reject(new Error("Chat storage is not ready.")),

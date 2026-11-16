@@ -49,6 +49,7 @@ export type ChatHistory = {
   chats: SavedChat[];
   activeId: string | null;
   messages: Message[];
+  selectedModel: string | null;
 };
 
 type Reader = Pick<SQLiteDatabase, "getFirstAsync" | "getAllAsync">;
@@ -68,7 +69,7 @@ export class HistoryStore {
         "PRAGMA user_version",
       );
       let version = row?.user_version ?? 0;
-      if (version > 8) throw new Error("Unsupported history database version");
+      if (version > 9) throw new Error("Unsupported history database version");
       if (version === 0) {
         await tx.execAsync(`
           CREATE TABLE chats (id TEXT PRIMARY KEY NOT NULL, title TEXT NOT NULL, updated_at INTEGER NOT NULL);
@@ -137,6 +138,18 @@ export class HistoryStore {
           CREATE INDEX draft_photos_by_chat ON draft_photos(chat_key, id);
           PRAGMA user_version = 8;
         `);
+      if (version <= 8) {
+        await tx.execAsync(`
+          ALTER TABLE chats ADD COLUMN selected_model TEXT;
+          ALTER TABLE app_state ADD COLUMN draft_model TEXT;
+          UPDATE chats SET selected_model = COALESCE(
+            (SELECT NULLIF(model, '') FROM messages WHERE messages.chat_id = chats.id
+             AND role = 'assistant' AND model IS NOT NULL AND model != '' ORDER BY id DESC LIMIT 1),
+            'openrouter/free'
+          );
+          PRAGMA user_version = 9;
+        `);
+      }
       await tx.runAsync(
         `UPDATE messages SET status = 'failed', error = ? WHERE status = 'pending'`,
         "The app closed before this reply finished. You can retry it.",
@@ -149,8 +162,13 @@ export class HistoryStore {
   }
 
   private async readFrom(db: Reader): Promise<ChatHistory> {
-    const state = await db.getFirstAsync<{ activeId: string | null }>(
-      "SELECT active_chat_id AS activeId FROM app_state WHERE id = 1",
+    const state = await db.getFirstAsync<{
+      activeId: string | null;
+      draftModel: string | null;
+      chatModel: string | null;
+    }>(
+      `SELECT s.active_chat_id AS activeId, s.draft_model AS draftModel, c.selected_model AS chatModel
+       FROM app_state s LEFT JOIN chats c ON c.id = s.active_chat_id WHERE s.id = 1`,
     );
     const activeId = state?.activeId ?? null;
     const chats = await db.getAllAsync<SavedChat>(`
@@ -160,7 +178,13 @@ export class HistoryStore {
     `);
     const messages =
       activeId === null ? [] : await this.readMessages(db, activeId);
-    return { chats, activeId, messages };
+    return {
+      chats,
+      activeId,
+      messages,
+      selectedModel:
+        (activeId === null ? state?.draftModel : state?.chatModel) ?? null,
+    };
   }
 
   private async readMessages(db: Reader, chatId: string): Promise<Message[]> {
@@ -387,6 +411,24 @@ export class HistoryStore {
     });
   }
 
+  setSelectedModel(chatId: string | null, model: string) {
+    return this.write(async (tx) => {
+      if (chatId === null)
+        await tx.runAsync(
+          "UPDATE app_state SET draft_model = ? WHERE id = 1",
+          model,
+        );
+      else {
+        const result = await tx.runAsync(
+          "UPDATE chats SET selected_model = ? WHERE id = ?",
+          model,
+          chatId,
+        );
+        if (result.changes !== 1) throw new Error("Chat no longer exists");
+      }
+    });
+  }
+
   beginReply(
     id: string,
     text: string,
@@ -401,7 +443,7 @@ export class HistoryStore {
         id,
       );
       await tx.runAsync(
-        `INSERT INTO chats (id, title, updated_at) VALUES (?, ?, ?)
+        `INSERT INTO chats (id, title, updated_at, selected_model) VALUES (?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at`,
         id,
         (text || (photos.length ? "Photo message" : "Voice message"))
@@ -409,7 +451,12 @@ export class HistoryStore {
           .trim()
           .slice(0, 70),
         now,
+        model,
       );
+      if (!existing)
+        await tx.runAsync(
+          "UPDATE app_state SET draft_model = NULL WHERE id = 1",
+        );
       if (!existing)
         await tx.runAsync(
           "UPDATE drafts SET chat_key = ? WHERE chat_key = ''",

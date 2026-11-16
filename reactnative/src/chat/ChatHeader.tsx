@@ -3,6 +3,7 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import SquarePen from "lucide-react-native/icons/square-pen";
 import Folder from "lucide-react-native/icons/folder";
 import Settings from "lucide-react-native/icons/settings";
+import ChevronDown from "lucide-react-native/icons/chevron-down";
 import X from "lucide-react-native/icons/x";
 
 import type { ChatColors } from "./theme";
@@ -16,6 +17,7 @@ type ChatHeaderProps = { colors: ChatColors } & (
     }
   | {
       mode: "chat" | "history";
+      modelSelector?: { label: string; disabled: boolean; onPress: () => void };
       newChatDisabled: boolean;
       navigationDisabled?: boolean;
       onNewChat: () => void;
@@ -28,9 +30,27 @@ export function ChatHeader(props: ChatHeaderProps) {
   const { colors, mode } = props;
   return (
     <View style={[styles.header, { borderBottomColor: colors.line }]}>
-      <Text numberOfLines={1} style={[styles.title, { color: colors.text }]}>
-        {props.mode === "settings" ? (props.title ?? "Settings") : "AGSpeak"}
-      </Text>
+      {props.mode === "chat" && props.modelSelector ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Change model, currently ${props.modelSelector.label}`}
+          disabled={props.modelSelector.disabled}
+          onPress={props.modelSelector.onPress}
+          style={styles.modelSelector}
+        >
+          <Text
+            numberOfLines={1}
+            style={[styles.modelTitle, { color: colors.text }]}
+          >
+            {props.modelSelector.label.replace(/^[^:/]+:\s+/, "")}
+          </Text>
+          <ChevronDown size={17} color={colors.muted} />
+        </Pressable>
+      ) : (
+        <Text numberOfLines={1} style={[styles.title, { color: colors.text }]}>
+          {props.mode === "settings" ? (props.title ?? "Settings") : "AGSpeak"}
+        </Text>
+      )}
       <View style={styles.actions}>
         {props.mode !== "settings" && (
           <>
@@ -122,6 +142,15 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     gap: 12,
   },
+  modelSelector: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 48,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+  modelTitle: { flexShrink: 1, fontSize: 18, fontWeight: "600" },
   title: { flex: 1, fontSize: 22, fontWeight: "700", letterSpacing: -0.6 },
   actions: { flexDirection: "row", alignItems: "center", gap: 4 },
   action: {

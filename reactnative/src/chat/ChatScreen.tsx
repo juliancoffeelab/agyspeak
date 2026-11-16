@@ -19,6 +19,7 @@ import {
 import { LegendList, type LegendListRef } from "@legendapp/list/react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { ChatModelPicker } from "./ChatModelPicker";
 import { PhotoViewer } from "./PhotoViewer";
 import { contextHasAudio, contextHasPhotos } from "./context";
 import { AudioMessage } from "./AudioWaveform";
@@ -46,6 +47,8 @@ type ChatScreenProps = {
   pending: PendingReply | null;
   connected: boolean;
   settings: ModelSettings;
+  modelName: string;
+  onChooseModel: (model: string) => Promise<boolean>;
   audioIssue: string | null;
   imageIssue: string | null;
   onReadPhoto: (reference: PhotoReference) => Promise<PhotoInput>;
@@ -77,11 +80,14 @@ export function ChatScreen({
   onOpenHistory,
   onRetry,
   settings,
+  modelName,
+  onChooseModel,
   audioIssue,
   imageIssue,
   onSendAudio,
   onReadPhoto,
 }: ChatScreenProps) {
+  const [choosingModel, setChoosingModel] = useState(false);
   const [photo, setPhoto] = useState<PhotoReference | null>(null);
   const closePhoto = useCallback(() => setPhoto(null), []);
   const [scrollRequest, setScrollRequest] = useState(0);
@@ -108,7 +114,23 @@ export function ChatScreen({
             onClose={closePhoto}
           />
         )}
+        {choosingModel && visible && (
+          <ChatModelPicker
+            colors={colors}
+            selected={settings.model}
+            onSelect={onChooseModel}
+            onClose={() => setChoosingModel(false)}
+          />
+        )}
         <ChatHeader
+          modelSelector={{
+            label: modelName,
+            disabled: !history || busy,
+            onPress: () => {
+              Keyboard.dismiss();
+              setChoosingModel(true);
+            },
+          }}
           colors={colors}
           mode="chat"
           newChatDisabled={!history || busy || history.activeId === null}
@@ -187,7 +209,7 @@ export function ChatScreen({
             audioIssue={audioIssue}
             imageIssue={imageIssue}
             colors={colors}
-            visible={visible}
+            visible={visible && !choosingModel}
             disabled={!history || !connected || busy}
             pending={pending !== null}
             onSendText={sendMessage}

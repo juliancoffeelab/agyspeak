@@ -173,6 +173,7 @@ export class ChatController {
   }
 
   send(text: string, settings: ModelSettings, photos: PhotoInput[] = []) {
+    settings = this.settingsForChat(settings);
     const trimmed = text.trim();
     if (!trimmed && !photos.length) return Promise.resolve(false);
     if (photos.length) {
@@ -227,6 +228,7 @@ export class ChatController {
   }
 
   sendAudio(audio: AudioInput, settings: ModelSettings) {
+    settings = this.settingsForChat(settings);
     try {
       validateAudio(audio);
     } catch (cause) {
@@ -259,7 +261,22 @@ export class ChatController {
     });
   }
 
+  private settingsForChat(settings: ModelSettings): ModelSettings {
+    return {
+      ...settings,
+      model: this.state.history.selectedModel ?? settings.model,
+    };
+  }
+  chooseModel(model: string) {
+    const selected = model.trim();
+    if (!selected) return Promise.resolve(false);
+    return this.change(() =>
+      this.store.setSelectedModel(this.state.history.activeId, selected),
+    );
+  }
+
   retryReply(id: number, settings: ModelSettings) {
+    settings = this.settingsForChat(settings);
     if (contextHasPhotos(this.state.history.messages, "")) {
       const issue = this.imageIssue(settings.model);
       if (issue) {

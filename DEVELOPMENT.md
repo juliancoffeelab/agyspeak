@@ -211,10 +211,10 @@ Settings replaces those actions with a Close icon in the Settings position;
 closing returns to the screen that opened it. The key scanner uses
 the same close position and returns to Settings.
 
-Settings groups model selection above OpenRouter credentials and spending.
+Settings groups the default model for new chats above OpenRouter credentials and spending.
 `ModelPicker` owns search, dismissal, and model autosave; `OpenRouterSection`
 owns key entry, confirmation, scanning, and spending. Selecting a suggestion,
-leaving the model field, or closing Settings commits the model immediately.
+leaving the default-model field, or closing Settings commits that default immediately without changing existing chats.
 Save is a text action beside Paste key, Scan QR, and Restore; it saves only the
 API key and leaves Settings open. Restore discards key edits and validation
 errors, restoring the saved key without writing storage. It is disabled when
@@ -442,3 +442,37 @@ short downward flick also dismisses. Short gestures spring back. Dismiss and
 snap-back animations use the native driver. Pinch gestures and panning while
 zoomed do not dismiss the viewer. The viewer has no instructional text. No extra
 native gesture library or model request is needed to view photos.
+
+
+## Per-chat model selection
+
+On chat screens the header replaces the AGSpeak title with the current model
+name and a chevron. Tapping opens a searchable, virtualized model list using the
+same TanStack catalog query as Settings. Shared model rows show cached prices
+and Photos/Audio capabilities; selected models have a checkmark. Explicit model
+IDs can still be entered. Searching, dismissing, and refreshing do not change
+the selection; tapping a model commits it. History keeps its ordinary heading.
+
+Schema v9 stores `chats.selected_model` and an optional `app_state.draft_model`
+for the unfinished new chat. Existing chats recover their last recorded assistant
+model, falling back to openrouter/free if none exists. Historical routed replies
+recorded only the actual provider model, so their original router selection
+cannot be reconstructed. New chats start with the Settings default unless their
+unfinished draft has an explicit selection. The first saved turn pins its model
+and consumes the scratch selection; subsequent new chats use the default again.
+
+Controller sends, audio sends, and retries resolve the chat's persisted selection
+before capability checks or inference. Changing a model keeps text/photo drafts,
+recordings, and history intact and does not remount the composer. Opening the
+picker stops an active recording and keeps the clip ready. A switch during a
+reply applies to subsequent sends/retries; the current request retains its
+captured settings. Actual response model IDs remain on reply rows and never
+overwrite the chat's selected model or router. Model switches use transactional
+storage and roll back on failed snapshot reads.
+
+Navigation hydrates text and photo drafts before committing selection/deletion,
+so metadata-read failures cannot leave SQLite and the visible draft in different
+chats. The photo viewer uses a stable close callback to preserve gestures across
+chat rerenders. Image loading now supplies 2048px decoder bounds before resize,
+so library images are downsampled while decoding rather than decoded at full
+sensor resolution first.

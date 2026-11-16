@@ -113,6 +113,7 @@ test("deleting a generating chat cannot resurrect it when the response arrives",
     assert.deepEqual(await store.read(), {
       chats: [],
       activeId: null,
+      selectedModel: null,
       messages: [],
     });
   } finally {

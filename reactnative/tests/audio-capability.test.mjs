@@ -77,6 +77,7 @@ test("unsupported text/audio sends and retries are blocked before changing saved
     const draft = controller.getSnapshot().draft;
     draft.edit("Keep this draft");
     await controller.flushDraft();
+    await controller.chooseModel("text");
     const before = await store.read();
     assert.equal(await controller.send("Follow-up", settings), false);
     assert.equal(await controller.sendAudio(recording, settings), false);
@@ -86,6 +87,7 @@ test("unsupported text/audio sends and retries are blocked before changing saved
     assert.equal(draft.value.text, "Keep this draft");
     assert.equal(await store.readDraft("chat"), "Keep this draft");
     assert.match(controller.getSnapshot().error, /doesn’t support audio/);
+    await controller.chooseModel("audio");
     assert.equal(
       await controller.retryReply(replyId, { ...settings, model: "audio" }),
       true,

@@ -13,6 +13,7 @@ test("history persists across reopening; switching and new chat preserve message
     assert.deepEqual(await connection.store.read(), {
       chats: [],
       activeId: null,
+      selectedModel: null,
       messages: [],
     });
     await appendTurn(
@@ -73,6 +74,7 @@ test("deleting a chat cascades to its messages and clears active selection only 
     assert.deepEqual(await store.read(), {
       chats: [],
       activeId: null,
+      selectedModel: null,
       messages: [],
     });
     assert.equal(
@@ -106,7 +108,7 @@ test("future database versions are rejected without resetting data", async () =>
   try {
     await store.initialize();
     await appendTurn(store, "existing", "Keep me", "Original", 1);
-    sqlite.exec("PRAGMA user_version = 9");
+    sqlite.exec("PRAGMA user_version = 10");
     await assert.rejects(store.initialize(), /Unsupported/);
     assert.equal((await store.read()).messages.length, 2);
   } finally {
@@ -173,7 +175,7 @@ test("v2 history migrates without losing messages; audio survives completion and
     await store.initialize();
     await appendTurn(store, "old", "Keep this chat", "Kept", 1);
     sqlite.exec(
-      "DROP TABLE draft_photos; DROP TABLE photos; DROP TABLE drafts; ALTER TABLE messages DROP COLUMN audio_length; ALTER TABLE messages DROP COLUMN audio_metadata; ALTER TABLE messages DROP COLUMN audio_data; ALTER TABLE messages DROP COLUMN audio_format; PRAGMA user_version=2;",
+      "ALTER TABLE chats DROP COLUMN selected_model; ALTER TABLE app_state DROP COLUMN draft_model; DROP TABLE draft_photos; DROP TABLE photos; DROP TABLE drafts; ALTER TABLE messages DROP COLUMN audio_length; ALTER TABLE messages DROP COLUMN audio_metadata; ALTER TABLE messages DROP COLUMN audio_data; ALTER TABLE messages DROP COLUMN audio_format; PRAGMA user_version=2;",
     );
     await store.initialize();
     assert.equal((await store.read()).messages[0].text, "Keep this chat");
@@ -224,7 +226,7 @@ test("v3 retained recordings migrate without changing audio or old transcripts",
       audio,
     );
     sqlite.exec(
-      "DROP TABLE draft_photos; DROP TABLE photos; DROP TABLE drafts; ALTER TABLE messages DROP COLUMN audio_length; ALTER TABLE messages DROP COLUMN audio_metadata; PRAGMA user_version=3;",
+      "ALTER TABLE chats DROP COLUMN selected_model; ALTER TABLE app_state DROP COLUMN draft_model; DROP TABLE draft_photos; DROP TABLE photos; DROP TABLE drafts; ALTER TABLE messages DROP COLUMN audio_length; ALTER TABLE messages DROP COLUMN audio_metadata; PRAGMA user_version=3;",
     );
     await store.initialize();
     const saved = await store.read();
@@ -234,7 +236,7 @@ test("v3 retained recordings migrate without changing audio or old transcripts",
       format: audio.format,
     });
     assert.equal(saved.messages[1].status, "failed");
-    assert.equal(sqlite.prepare("PRAGMA user_version").get().user_version, 8);
+    assert.equal(sqlite.prepare("PRAGMA user_version").get().user_version, 9);
   } finally {
     sqlite.close();
   }
@@ -305,7 +307,7 @@ test("v4 migration preserves recordings and populates lazy-loading metadata", as
       format: "wav",
     });
     sqlite.exec(
-      "DROP TABLE draft_photos; DROP TABLE photos; DROP TABLE drafts; ALTER TABLE messages DROP COLUMN audio_length; PRAGMA user_version=4;",
+      "ALTER TABLE chats DROP COLUMN selected_model; ALTER TABLE app_state DROP COLUMN draft_model; DROP TABLE draft_photos; DROP TABLE photos; DROP TABLE drafts; ALTER TABLE messages DROP COLUMN audio_length; PRAGMA user_version=4;",
     );
     await store.initialize();
     const saved = await store.read();
@@ -325,7 +327,7 @@ test("drafts survive reopening and v5 migration preserves existing conversations
     await first.store.initialize();
     await appendTurn(first.store, "chat", "Hello", "Hi", 1);
     first.sqlite.exec(
-      "DROP TABLE draft_photos; DROP TABLE photos; DROP TABLE drafts; PRAGMA user_version = 5",
+      "ALTER TABLE chats DROP COLUMN selected_model; ALTER TABLE app_state DROP COLUMN draft_model; DROP TABLE draft_photos; DROP TABLE photos; DROP TABLE drafts; PRAGMA user_version = 5",
     );
     first.sqlite.close();
     const second = connect(path);

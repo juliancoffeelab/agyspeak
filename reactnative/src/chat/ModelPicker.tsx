@@ -9,7 +9,8 @@ import {
   View,
 } from "react-native";
 import { DEFAULT_SETTINGS } from "./settings";
-import { matchModels, modelPrice } from "./routerMetadata";
+import { ModelOption } from "./ModelOption";
+import { matchModels } from "./routerMetadata";
 import { useModelCatalog } from "./useRouterMetadata";
 import { settingsStyles as styles } from "./settingsStyles";
 import type { ChatColors } from "./theme";
@@ -18,11 +19,13 @@ export type ModelPickerHandle = { finishEditing: () => void };
 
 export function ModelPicker({
   colors,
+  label = "Model",
   initial,
   onSave,
   ref,
 }: {
   colors: ChatColors;
+  label?: string;
   initial: string;
   onSave: (model: string) => Promise<void>;
   ref?: Ref<ModelPickerHandle>;
@@ -67,7 +70,7 @@ export function ModelPicker({
   return (
     <View style={styles.section}>
       <View style={styles.sectionHeading}>
-        <Text style={[styles.label, { color: colors.text }]}>Model</Text>
+        <Text style={[styles.label, { color: colors.text }]}>{label}</Text>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Refresh model list"
@@ -102,41 +105,15 @@ export function ModelPicker({
       {choosingModel && (
         <View>
           {suggestions.map((item) => (
-            <Pressable
+            <ModelOption
               key={item.id}
-              accessibilityRole="button"
-              accessibilityLabel={`Select ${item.name}`}
+              model={item}
+              colors={colors}
               onPress={() => {
                 finishModelEditing(item.id);
                 Keyboard.dismiss();
               }}
-              style={[styles.suggestion, { borderBottomColor: colors.line }]}
-            >
-              <View style={styles.modelName}>
-                <Text
-                  numberOfLines={1}
-                  style={{ color: colors.text, fontSize: 15 }}
-                >
-                  {item.name}
-                </Text>
-                <Text
-                  numberOfLines={1}
-                  style={{ color: colors.muted, fontSize: 12 }}
-                >
-                  {item.id}
-                </Text>
-                <Text style={{ color: colors.muted, fontSize: 12 }}>
-                  {modelPrice(item)}
-                </Text>
-              </View>
-              {(item.audio || item.image) && (
-                <Text style={{ color: colors.muted, fontSize: 12 }}>
-                  {[item.image && "Photos", item.audio && "Audio"]
-                    .filter(Boolean)
-                    .join(" · ")}
-                </Text>
-              )}
-            </Pressable>
+            />
           ))}
           {suggestions.length === 0 && !catalog.loading && (
             <Text style={[styles.hint, { color: colors.muted }]}>
