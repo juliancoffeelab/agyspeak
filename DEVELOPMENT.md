@@ -422,7 +422,7 @@ request uses image_url parts with JPEG base64 data URLs and an optional text
 part, through the same streaming endpoint as text/audio. Photos are sent only
 on an explicit Send; selecting or capturing does not run inference.
 
-The catalog cache v4 / format v3 includes image-input capability. Older caches
+The catalog cache v4 / format v4 includes image-input capability and contains only models whose endpoint list explicitly includes `/api/v1/chat/completions`. Older caches
 are not treated as evidence of image support; the public catalog is refetched.
 The earlier raw-shaped cache may also have lost image capabilities during its
 original normalization, so it is not reused. Settings suggestions
@@ -476,3 +476,5 @@ chats. The photo viewer uses a stable close callback to preserve gestures across
 chat rerenders. Image loading now supplies 2048px decoder bounds before resize,
 so library images are downsampled while decoding rather than decoded at full
 sensor resolution first.
+
+The shared catalog parser requires the live model record’s `endpoints` array to include `/api/v1/chat/completions`, as well as retaining the text-output filter. Batch-only, Responses-only, missing/invalid endpoint metadata, and non-text-output records are excluded from both model lists. Format v4 invalidates earlier caches so old unfiltered entries are not reused. This filtering uses the public catalog and does not probe models with inference requests. Explicit custom model IDs remain available.

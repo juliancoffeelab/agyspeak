@@ -1,7 +1,7 @@
 import type { RouterModel } from "./routerMetadata";
 
 export function encodeCatalog(models: RouterModel[]) {
-  return { version: 3, models };
+  return { version: 4, models };
 }
 
 export function decodeCatalog(value: unknown): RouterModel[] {
@@ -9,7 +9,7 @@ export function decodeCatalog(value: unknown): RouterModel[] {
     typeof value !== "object" ||
     value === null ||
     !("version" in value) ||
-    value.version !== 3 ||
+    value.version !== 4 ||
     !("models" in value) ||
     !Array.isArray(value.models) ||
     !value.models.length

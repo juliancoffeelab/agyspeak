@@ -15,7 +15,7 @@ const models = [
 
 test("saved catalog preserves normalized records without reconstructing provider JSON", () => {
   const stored = JSON.parse(JSON.stringify(encodeCatalog(models)));
-  assert.deepEqual(stored, { version: 3, models });
+  assert.deepEqual(stored, { version: 4, models });
   assert.deepEqual(decodeCatalog(stored), models);
 });
 
@@ -24,11 +24,12 @@ test("unsupported or damaged catalogs are rejected for a fresh download", () => 
     null,
     { version: 1, models },
     { version: 2, models },
-    { version: 3, models: [] },
-    { version: 3, models: [{ ...models[0], audio: "yes" }] },
-    { version: 3, models: [{ ...models[0], inputPrice: -1 }] },
-    { version: 3, models: [{ ...models[0], outputPrice: "0" }] },
-    { version: 3, models: [{ ...models[0], id: "" }] },
+    { version: 3, models },
+    { version: 4, models: [] },
+    { version: 4, models: [{ ...models[0], audio: "yes" }] },
+    { version: 4, models: [{ ...models[0], inputPrice: -1 }] },
+    { version: 4, models: [{ ...models[0], outputPrice: "0" }] },
+    { version: 4, models: [{ ...models[0], id: "" }] },
   ])
     assert.throws(() => decodeCatalog(bad), /Invalid saved model catalog/);
 });

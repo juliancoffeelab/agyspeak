@@ -16,6 +16,7 @@ const catalog = {
     {
       id: "test/model",
       name: "Test",
+      endpoints: ["/api/v1/chat/completions"],
       pricing: { prompt: "0", completion: "0" },
     },
   ],

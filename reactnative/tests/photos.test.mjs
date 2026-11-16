@@ -129,11 +129,13 @@ test("catalog distinguishes image-capable models and unknown metadata", () => {
       {
         id: "vision",
         name: "Vision",
+        endpoints: ["/api/v1/chat/completions"],
         architecture: { input_modalities: ["text", "image"] },
       },
       {
         id: "text",
         name: "Text",
+        endpoints: ["/api/v1/chat/completions"],
         architecture: { input_modalities: ["text"] },
       },
     ],

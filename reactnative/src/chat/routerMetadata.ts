@@ -34,6 +34,11 @@ export function parseModels(value: unknown): RouterModel[] {
       typeof item.name !== "string"
     )
       continue;
+    if (
+      !Array.isArray(item.endpoints) ||
+      !item.endpoints.includes("/api/v1/chat/completions")
+    )
+      continue;
     const architecture = record(item.architecture) ? item.architecture : null;
     if (
       architecture &&

@@ -14,6 +14,7 @@ test("catalog keeps text-output models and their audio capabilities", () => {
       {
         id: "google/flash",
         name: "Gemini Flash",
+        endpoints: ["/api/v1/chat/completions"],
         architecture: {
           input_modalities: ["text", "audio"],
           output_modalities: ["text"],
@@ -22,11 +23,13 @@ test("catalog keeps text-output models and their audio capabilities", () => {
       {
         id: "vendor/image",
         name: "Image",
+        endpoints: ["/api/v1/chat/completions"],
         architecture: { output_modalities: ["image"] },
       },
       {
         id: "vendor/chat",
         name: "Chat",
+        endpoints: ["/api/v1/chat/completions"],
         architecture: { input_modalities: ["text"] },
       },
       { id: 42 },
@@ -90,6 +93,7 @@ test("suggestion prices use catalog rates, preserve free, and reject missing pri
       {
         id: "paid",
         name: "Paid",
+        endpoints: ["/api/v1/chat/completions"],
         pricing: { prompt: "0.0000003", completion: "0.0000025" },
       },
     ],
@@ -100,6 +104,7 @@ test("suggestion prices use catalog rates, preserve free, and reject missing pri
       {
         id: "free",
         name: "Free",
+        endpoints: ["/api/v1/chat/completions"],
         pricing: { prompt: "0", completion: "0" },
       },
     ],
@@ -110,6 +115,7 @@ test("suggestion prices use catalog rates, preserve free, and reject missing pri
       {
         id: "unknown",
         name: "Unknown",
+        endpoints: ["/api/v1/chat/completions"],
         pricing: { prompt: "", completion: "-1" },
       },
     ],
@@ -120,9 +126,44 @@ test("suggestion prices use catalog rates, preserve free, and reject missing pri
       {
         id: paid.id,
         name: paid.name,
+        endpoints: ["/api/v1/chat/completions"],
         pricing: { prompt: paid.inputPrice, completion: paid.outputPrice },
       },
     ],
   });
   assert.equal(modelPrice(cached), modelPrice(paid));
+});
+
+test("catalog requires explicit Chat Completions compatibility, independent of text output", () => {
+  const model = {
+    id: "vendor/chat",
+    name: "Chat",
+    architecture: { output_modalities: ["text"] },
+  };
+  const parsed = parseModels({
+    data: [
+      {
+        ...model,
+        endpoints: ["/api/v1/chat/completions", "/api/v1/responses"],
+      },
+      { ...model, id: "vendor/batch", endpoints: ["/api/v1/batches"] },
+      { ...model, id: "vendor/responses", endpoints: ["/api/v1/responses"] },
+      { ...model, id: "vendor/unknown" },
+      {
+        ...model,
+        id: "vendor/malformed",
+        endpoints: "/api/v1/chat/completions",
+      },
+      {
+        ...model,
+        id: "vendor/image-only",
+        endpoints: ["/api/v1/chat/completions"],
+        architecture: { output_modalities: ["image"] },
+      },
+    ],
+  });
+  assert.deepEqual(
+    parsed.map((item) => item.id),
+    ["vendor/chat"],
+  );
 });
