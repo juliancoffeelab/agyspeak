@@ -97,7 +97,11 @@ test("suggestion prices use catalog rates, preserve free, and reject missing pri
   assert.equal(modelPrice(paid), "$0.30 in · $2.50 out / 1M tokens");
   const [free] = parseModels({
     data: [
-      { id: "free", name: "Free", pricing: { prompt: "0", completion: "0" } },
+      {
+        id: "free",
+        name: "Free",
+        pricing: { prompt: "0", completion: "0" },
+      },
     ],
   });
   assert.equal(modelPrice(free), "$0.00 in · $0.00 out / 1M tokens");

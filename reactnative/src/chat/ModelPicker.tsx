@@ -129,8 +129,12 @@ export function ModelPicker({
                   {modelPrice(item)}
                 </Text>
               </View>
-              {item.audio && (
-                <Text style={{ color: colors.muted, fontSize: 12 }}>Audio</Text>
+              {(item.audio || item.image) && (
+                <Text style={{ color: colors.muted, fontSize: 12 }}>
+                  {[item.image && "Photos", item.audio && "Audio"]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </Text>
               )}
             </Pressable>
           ))}
@@ -149,7 +153,7 @@ export function ModelPicker({
           {saveError ??
             catalog.error ??
             (selectedModel
-              ? `${selectedModel.name}${selectedModel.audio ? " · Audio supported" : " · No audio input"}`
+              ? `${selectedModel.name}${selectedModel.image ? " · Photos" : ""}${selectedModel.audio ? " · Audio" : ""}`
               : " ")}
         </Text>
       )}

@@ -33,6 +33,8 @@ async function setup(reply) {
     reply,
     () => `chat-${++next}`,
     await store.readDraft(null),
+    () => null,
+    () => null,
   );
   return { store, sqlite, controller };
 }

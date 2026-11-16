@@ -2,6 +2,7 @@ export type RouterModel = {
   id: string;
   name: string;
   audio: boolean;
+  image: boolean;
   inputPrice: number | null;
   outputPrice: number | null;
 };
@@ -50,6 +51,11 @@ export function parseModels(value: unknown): RouterModel[] {
       outputPrice: pricing ? price(pricing.completion) : null,
       id: item.id,
       name: item.name,
+      image: Boolean(
+        architecture &&
+        Array.isArray(architecture.input_modalities) &&
+        architecture.input_modalities.includes("image"),
+      ),
       audio: Boolean(
         architecture &&
         Array.isArray(architecture.input_modalities) &&

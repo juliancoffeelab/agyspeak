@@ -103,6 +103,8 @@ test("drafts stay isolated per conversation and the new-chat slot without creati
     () => new Promise(() => {}),
     () => `chat-${++next}`,
     await store.readDraft(history.activeId),
+    () => null,
+    () => null,
   );
   try {
     const snapshot = controller.getSnapshot();
@@ -137,6 +139,8 @@ test("successful Send consumes its draft atomically and preserves typing during 
     () => new Promise(() => {}),
     () => "created",
     "",
+    () => null,
+    () => null,
   );
   try {
     const draft = controller.getSnapshot().draft;
@@ -188,6 +192,8 @@ test("audio Send transfers and preserves a text draft instead of consuming it", 
     () => new Promise(() => {}),
     () => "audio-chat",
     "",
+    () => null,
+    () => null,
   );
   try {
     const draft = controller.getSnapshot().draft;
@@ -213,6 +219,8 @@ test("failed navigation keeps the current composer and its persisted text", asyn
     () => new Promise(() => {}),
     () => "new",
     "",
+    () => null,
+    () => null,
   );
   try {
     const draft = controller.getSnapshot().draft;

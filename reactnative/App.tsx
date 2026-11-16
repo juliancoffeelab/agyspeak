@@ -11,13 +11,24 @@ import { ChatScreen } from "./src/chat/ChatScreen";
 import { HistoryScreen } from "./src/chat/HistoryScreen";
 import { palettes } from "./src/chat/theme";
 import { useModelSettings } from "./src/chat/useModelSettings";
+import { useModelCatalog } from "./src/chat/useRouterMetadata";
+import { audioInputIssue, imageInputIssue } from "./src/chat/audioCapability";
 import { SettingsScreen } from "./src/chat/SettingsScreen";
 
 export default function App() {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <ChatApp />
+    </QueryClientProvider>
+  );
+}
+
+function ChatApp() {
   const dark = useColorScheme() === "dark";
   const colors = palettes[dark ? "dark" : "light"];
   const {
     history,
+    readPhoto,
     draft,
     flushDraft,
     busy,
@@ -32,6 +43,9 @@ export default function App() {
     remove,
   } = useChatHistory();
   const model = useModelSettings();
+  const catalog = useModelCatalog();
+  const audioIssue = audioInputIssue(model.settings.model, catalog.models);
+  const imageIssue = imageInputIssue(model.settings.model, catalog.models);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
 
@@ -60,72 +74,73 @@ export default function App() {
   }
 
   return (
-    <QueryClientProvider client={queryClient}>
-      <SafeAreaProvider>
-        <StatusBar style={dark ? "light" : "dark"} />
-        <ChatScreen
-          colors={colors}
-          visible={!historyOpen && !settingsOpen}
-          history={history}
-          busy={busy}
-          error={error ?? model.error}
-          pending={pending}
-          connected={model.ready && Boolean(model.settings.apiKey)}
-          settings={model.settings}
-          onSendAudio={sendAudio}
-          onStop={() => {
-            void stop();
-          }}
-          onRetryReply={(id) => {
-            void retryReply(id, model.settings);
-          }}
-          onOpenSettings={() => {
-            if (model.ready)
-              void flushDraft().then((saved) => {
-                if (saved) setSettingsOpen(true);
-              });
-          }}
-          draft={draft}
-          onSend={(text) => send(text, model.settings)}
-          onNewChat={() => {
-            void openChat(null);
-          }}
-          onOpenHistory={() => {
+    <SafeAreaProvider>
+      <StatusBar style={dark ? "light" : "dark"} />
+      <ChatScreen
+        colors={colors}
+        visible={!historyOpen && !settingsOpen}
+        history={history}
+        busy={busy}
+        error={error ?? model.error}
+        pending={pending}
+        connected={model.ready && Boolean(model.settings.apiKey)}
+        settings={model.settings}
+        audioIssue={audioIssue}
+        imageIssue={imageIssue}
+        onSendAudio={sendAudio}
+        onReadPhoto={readPhoto}
+        onStop={() => {
+          void stop();
+        }}
+        onRetryReply={(id) => {
+          void retryReply(id, model.settings);
+        }}
+        onOpenSettings={() => {
+          if (model.ready)
             void flushDraft().then((saved) => {
-              if (saved) setHistoryOpen(true);
+              if (saved) setSettingsOpen(true);
             });
-          }}
-          onRetry={retry}
-        />
-        <HistoryScreen
-          visible={historyOpen && !settingsOpen}
+        }}
+        draft={draft}
+        onSend={(text, photos) => send(text, model.settings, photos)}
+        onNewChat={() => {
+          void openChat(null);
+        }}
+        onOpenHistory={() => {
+          void flushDraft().then((saved) => {
+            if (saved) setHistoryOpen(true);
+          });
+        }}
+        onRetry={retry}
+      />
+      <HistoryScreen
+        visible={historyOpen && !settingsOpen}
+        colors={colors}
+        chats={history?.chats ?? []}
+        activeId={history?.activeId ?? null}
+        busy={busy}
+        error={error}
+        onClose={() => setHistoryOpen(false)}
+        onOpen={(id) => {
+          void openChat(id);
+        }}
+        onDelete={deleteChat}
+        onSettings={() => {
+          if (model.ready)
+            void flushDraft().then((saved) => {
+              if (saved) setSettingsOpen(true);
+            });
+        }}
+      />
+      {settingsOpen && model.ready && (
+        <SettingsScreen
           colors={colors}
-          chats={history?.chats ?? []}
-          activeId={history?.activeId ?? null}
-          busy={busy}
-          error={error}
-          onClose={() => setHistoryOpen(false)}
-          onOpen={(id) => {
-            void openChat(id);
-          }}
-          onDelete={deleteChat}
-          onSettings={() => {
-            if (model.ready)
-              void flushDraft().then((saved) => {
-                if (saved) setSettingsOpen(true);
-              });
-          }}
+          initial={model.settings}
+          onSaveKey={model.saveKey}
+          onSaveModel={model.saveModel}
+          onClose={() => setSettingsOpen(false)}
         />
-        {settingsOpen && model.ready && (
-          <SettingsScreen
-            colors={colors}
-            initial={model.settings}
-            onSaveKey={model.saveKey}
-            onSaveModel={model.saveModel}
-            onClose={() => setSettingsOpen(false)}
-          />
-        )}
-      </SafeAreaProvider>
-    </QueryClientProvider>
+      )}
+    </SafeAreaProvider>
   );
 }

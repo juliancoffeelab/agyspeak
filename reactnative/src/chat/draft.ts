@@ -12,9 +12,10 @@ export async function submitDraft(
   save: (text: string) => Promise<boolean>,
   clear: () => void,
   restore: (text: string) => void,
+  allowEmpty = false,
 ) {
   const original = draft.text;
-  if (!original.trim()) return false;
+  if (!original.trim() && !allowEmpty) return false;
   editDraft(draft, "");
   const clearedVersion = draft.version;
   clear();

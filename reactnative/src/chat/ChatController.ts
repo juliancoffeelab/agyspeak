@@ -1,8 +1,17 @@
+import { contextHasAudio, contextHasPhotos } from "./context.ts";
 import { PersistentDraft } from "./PersistentDraft.ts";
 import { StreamingText } from "./StreamingText.ts";
-import type { AudioInput, ChatHistory, HistoryStore } from "./history";
+import type {
+  AudioInput,
+  PhotoInput,
+  PhotoAttachment,
+  PhotoReference,
+  ChatHistory,
+  HistoryStore,
+} from "./history";
 import {
   validateAudio,
+  validatePhotos,
   type ModelSettings,
   type ReplyFunction,
 } from "./openRouter.ts";
@@ -24,6 +33,8 @@ type Run = PendingReply & { abort: AbortController };
 export class ChatController {
   private readonly store: HistoryStore;
   private readonly reply: ReplyFunction;
+  private readonly imageIssue: (model: string) => string | null;
+  private readonly audioIssue: (model: string) => string | null;
   private readonly createId: () => string;
   private state: ChatState;
   private readonly listeners = new Set<() => void>();
@@ -38,20 +49,29 @@ export class ChatController {
     reply: ReplyFunction,
     createId: () => string,
     initialDraft: string,
+    audioIssue: (model: string) => string | null,
+    imageIssue: (model: string) => string | null,
+    initialPhotos: PhotoAttachment[] = [],
   ) {
     this.store = store;
+    this.audioIssue = audioIssue;
+    this.imageIssue = imageIssue;
     this.reply = reply;
     this.createId = createId;
     this.state = {
       history,
-      draft: this.createDraft(history.activeId, initialDraft),
+      draft: this.createDraft(history.activeId, initialDraft, initialPhotos),
       saving: false,
       pending: null,
       error: null,
     };
   }
 
-  private createDraft(chatId: string | null, text: string) {
+  private createDraft(
+    chatId: string | null,
+    text: string,
+    photos: PhotoAttachment[] = [],
+  ) {
     const draft: PersistentDraft = new PersistentDraft(
       ++this.draftKey,
       chatId,
@@ -61,8 +81,21 @@ export class ChatController {
         this.publish({
           error: "Couldn’t save your draft. Try leaving the chat again.",
         }),
+      {
+        initial: photos,
+        read: () =>
+          this.write(() => this.store.readPhotoDraftData(draft.chatId)),
+        add: (inputs) =>
+          this.write(() => this.store.addPhotoDraft(draft.chatId, inputs)),
+        remove: (id) =>
+          this.write(() => this.store.removePhotoDraft(draft.chatId, id)),
+      },
     );
     return draft;
+  }
+
+  readPhoto(reference: PhotoReference) {
+    return this.write(() => this.store.readPhoto(reference));
   }
 
   async flushDraft() {
@@ -139,15 +172,42 @@ export class ChatController {
     return true;
   }
 
-  send(text: string, settings: ModelSettings) {
+  send(text: string, settings: ModelSettings, photos: PhotoInput[] = []) {
     const trimmed = text.trim();
-    if (!trimmed) return Promise.resolve(false);
+    if (!trimmed && !photos.length) return Promise.resolve(false);
+    if (photos.length) {
+      try {
+        validatePhotos(photos);
+      } catch (cause) {
+        this.publish({
+          error: cause instanceof Error ? cause.message : "Invalid photos.",
+        });
+        return Promise.resolve(false);
+      }
+    }
     if (trimmed.length > 12_000) {
       this.publish({
         error:
           "That message is too long. Please keep it under 12,000 characters.",
       });
       return Promise.resolve(false);
+    }
+    if (contextHasAudio(this.state.history.messages, trimmed, photos)) {
+      const issue = this.audioIssue(settings.model);
+      if (issue) {
+        this.publish({ error: issue });
+        return Promise.resolve(false);
+      }
+    }
+    if (
+      photos.length ||
+      contextHasPhotos(this.state.history.messages, trimmed, photos)
+    ) {
+      const issue = this.imageIssue(settings.model);
+      if (issue) {
+        this.publish({ error: issue });
+        return Promise.resolve(false);
+      }
     }
     const id = this.state.history.activeId ?? this.createId();
     const draft = this.state.draft;
@@ -157,8 +217,11 @@ export class ChatController {
         trimmed,
         settings.model,
         Date.now(),
+        undefined,
+        photos,
       );
       draft.chatId = id;
+      if (photos.length) draft.consumePhotos();
       return history;
     });
   }
@@ -170,6 +233,15 @@ export class ChatController {
       this.publish({
         error: cause instanceof Error ? cause.message : "Invalid audio.",
       });
+      return Promise.resolve(false);
+    }
+    const issue =
+      this.audioIssue(settings.model) ??
+      (contextHasPhotos(this.state.history.messages, "")
+        ? this.imageIssue(settings.model)
+        : null);
+    if (issue) {
+      this.publish({ error: issue });
       return Promise.resolve(false);
     }
     const id = this.state.history.activeId ?? this.createId();
@@ -188,6 +260,20 @@ export class ChatController {
   }
 
   retryReply(id: number, settings: ModelSettings) {
+    if (contextHasPhotos(this.state.history.messages, "")) {
+      const issue = this.imageIssue(settings.model);
+      if (issue) {
+        this.publish({ error: issue });
+        return Promise.resolve(false);
+      }
+    }
+    if (contextHasAudio(this.state.history.messages, "")) {
+      const issue = this.audioIssue(settings.model);
+      if (issue) {
+        this.publish({ error: issue });
+        return Promise.resolve(false);
+      }
+    }
     return this.start(settings, () =>
       this.store.retryReply(id, settings.model, Date.now()),
     );
@@ -199,6 +285,14 @@ export class ChatController {
         this.store.readContext(run.chatId),
       );
       if (this.active !== run || run.abort.signal.aborted) return;
+      const issue = messages.some((message) => message.audio)
+        ? this.audioIssue(settings.model)
+        : null;
+      const photoIssue = messages.some((message) => message.photos?.length)
+        ? this.imageIssue(settings.model)
+        : null;
+      if (issue || photoIssue)
+        throw new Error(issue ?? photoIssue ?? "Unsupported input.");
       const completion = await this.reply(
         messages,
         settings,
@@ -293,9 +387,10 @@ export class ChatController {
       await previous.flush();
       const next = await this.write(async () => {
         const text = await this.store.readDraft(id);
+        const photos = await this.store.readPhotoDraft(id);
         return {
           history: await this.store.select(id),
-          draft: this.createDraft(id, text),
+          draft: this.createDraft(id, text, photos),
         };
       });
       previous.close();
@@ -322,10 +417,15 @@ export class ChatController {
     try {
       const next = await this.write(async () => {
         const text = deletingCurrent ? await this.store.readDraft(null) : "";
+        const photos = deletingCurrent
+          ? await this.store.readPhotoDraft(null)
+          : [];
         const history = await this.store.remove(id);
         return {
           history,
-          draft: deletingCurrent ? this.createDraft(null, text) : previous,
+          draft: deletingCurrent
+            ? this.createDraft(null, text, photos)
+            : previous,
         };
       });
       if (deletingCurrent) previous.close();

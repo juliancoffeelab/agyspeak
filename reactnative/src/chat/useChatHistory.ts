@@ -3,8 +3,17 @@ import { fetch as streamingFetch } from "expo/fetch";
 import { AppState } from "react-native";
 import { randomUUID } from "expo-crypto";
 
+import { audioInputIssue, imageInputIssue } from "./audioCapability";
+import { queryClient } from "./queryClient";
+import { MODEL_CATALOG_KEY } from "./routerQueries";
+import type { RouterModel } from "./routerMetadata";
 import { ChatController, type ChatState } from "./ChatController";
-import { HistoryStore, type AudioInput } from "./history";
+import {
+  HistoryStore,
+  type AudioInput,
+  type PhotoReference,
+  type PhotoInput,
+} from "./history";
 import { completeReply, type ModelSettings } from "./openRouter";
 
 export function useChatHistory() {
@@ -27,6 +36,7 @@ export function useChatHistory() {
         await store.initialize();
         const history = await store.read();
         const initialDraft = await store.readDraft(history.activeId);
+        const initialPhotos = await store.readPhotoDraft(history.activeId);
         const controller = new ChatController(
           store,
           history,
@@ -34,6 +44,17 @@ export function useChatHistory() {
             completeReply(messages, settings, signal, onText, streamingFetch),
           randomUUID,
           initialDraft,
+          (model) =>
+            audioInputIssue(
+              model,
+              queryClient.getQueryData<RouterModel[]>(MODEL_CATALOG_KEY),
+            ),
+          (model) =>
+            imageInputIssue(
+              model,
+              queryClient.getQueryData<RouterModel[]>(MODEL_CATALOG_KEY),
+            ),
+          initialPhotos,
         );
         if (mounted) {
           controllerRef.current = controller;
@@ -75,6 +96,9 @@ export function useChatHistory() {
   }, [attempt]);
 
   return {
+    readPhoto: (reference: PhotoReference) =>
+      controllerRef.current?.readPhoto(reference) ??
+      Promise.reject(new Error("Chat storage is not ready.")),
     history: state?.history ?? null,
     draft: state?.draft ?? null,
     flushDraft: () =>
@@ -86,8 +110,9 @@ export function useChatHistory() {
       setOpenError(null);
       setAttempt((value) => value + 1);
     },
-    send: (text: string, settings: ModelSettings) =>
-      controllerRef.current?.send(text, settings) ?? Promise.resolve(false),
+    send: (text: string, settings: ModelSettings, photos?: PhotoInput[]) =>
+      controllerRef.current?.send(text, settings, photos) ??
+      Promise.resolve(false),
     sendAudio: (audio: AudioInput, settings: ModelSettings) =>
       controllerRef.current?.sendAudio(audio, settings) ??
       Promise.resolve(false),

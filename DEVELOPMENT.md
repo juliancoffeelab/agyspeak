@@ -231,7 +231,7 @@ values, and deletes the old record only after both writes succeed. Interrupted
 migration can retry without losing either value. Preference writes are queued
 so rapid model selections persist in order.
 The model picker searches a compact, on-device catalog from `GET /models`;
-the first visit downloads it, later visits use the saved file, and the refresh
+the app loads it on startup, downloading it if no compatible saved file exists; later launches use the saved file, and the refresh
 icon replaces it explicitly. Audio support comes from the catalog's input
 modalities. Suggestions show cached input/output token prices per million
 tokens. Tapping outside the picker or finishing keyboard input dismisses its
@@ -270,10 +270,12 @@ Each chat has a text draft in SQLite, plus one slot for an unfinished new chat.
 edits do not publish chat snapshots. History/settings navigation and app
 backgrounding flush pending writes. Chat selection reads the target draft
 before mounting its composer, so asynchronous hydration cannot overwrite typing.
-Schema v6 adds draft storage without changing saved conversations.
+Schema v6 adds text drafts; v7 adds photo attachments; v8 adds persistent photo drafts without changing saved conversations.
 
 The composer uses an uncontrolled native `TextInput`; React state only tracks
-whether there is sendable text. Typing
+whether there is sendable text and whether its request needs audio. Native-input
+eligibility uses `useSyncExternalStore`; typing only rerenders the composer when
+one of those booleans changes. Typing
 does not update `App` or the message list. The input uses native font line
 metrics instead of an explicit line height, keeping growing-field measurement
 aligned with the Android editor. The input stays mounted during audio
@@ -295,9 +297,7 @@ are serialized; failed submissions retain their clip for explicit retry.
 
 The composer has a microphone beside the text field. Tap it to record; the
 send arrow stops and sends, and × discards it. Recording stops at 120 seconds. Backgrounding the app stops capture
-and keeps the clip ready to send manually. The + button opens Android's audio
-file picker, including clips pushed to `/sdcard/Download/` with ADB. Files must be
-under 8 MB.
+and keeps the clip ready to send manually. The + button opens an attachment sheet with Camera, Photos, and Audio file. Audio files can include clips pushed to `/sdcard/Download/` with ADB and must be under 8 MB.
 
 Voice requests contain native audio attachments with no transcription prompt or
 structured response format. Gemini returns an ordinary text reply. Original
@@ -325,11 +325,16 @@ handles comments, split UTF-8, final usage, and truncated or failed streams with
 no automatic retries. Offline checks use fake streams and never call a model.
 
 Every request uses the selected model, including voice turns and text follow-ups
-with audio context. Unsupported audio input is reported as a provider error; no
-model is silently substituted. Gemini Flash uses low thinking effort. Requests
+with audio context. The cached model catalog gates audio input. Unsupported or unknown audio
+capabilities block recording, file attachment, sends whose bounded context
+contains audio, and retries with audio context. Those controls look unavailable
+but stay tappable to show an explanation; Stop and Discard remain usable. The
+controller checks again before saving a turn and before inference, preserving
+drafts and clips on blocked actions. Plain text without audio context remains
+usable. Provider errors are still surfaced without substituting another model. Gemini Flash uses low thinking effort. Requests
 with audio context have a 1,024-token reply limit.
 Context is bounded to recent history with 24,000 text characters and 12 MB of
-encoded audio data (before base64 expansion). Text-only requests keep their
+combined audio and photo data (before base64 expansion). Text-only requests keep their
 512-token limit. Deleting a chat removes its recordings, capture metadata, and text draft.
 No inference runs as part of `pnpm check`.
 
@@ -377,3 +382,50 @@ generates a persistent local signing key under `.signing/`; keep a private backu
 because updates require the same key. Signing files and build artifacts are
 ignored by Git. Development uses package `dev.agyspeak.app.dev`; release uses
 `dev.agyspeak.app`, so both builds can coexist.
+
+
+## Photo attachments
+
+Camera and Photos use Expo ImagePicker's native camera and library interfaces.
+Camera permission is requested when opening capture. These flows select
+images only, with up to four photos and 8 MB combined per message. Expo
+ImageManipulator normalizes selected images to JPEG (quality 0.85), preserves
+aspect ratio, and downsizes only when the long edge exceeds 2048 pixels. A
+240-pixel preview is stored separately; EXIF is not forwarded in the request.
+
+The composer shows removable previews above the uncontrolled caption input.
+Send submits the caption and images as one user turn, or images alone when the
+caption is blank. Failed or blocked submissions preserve the selection and
+caption. Photo selection and audio attachment are separate turns. Unsent photos
+are saved to SQLite as soon as preparation completes, alongside the per-chat
+text draft (including the unfinished new-chat slot). Switching chats and app
+restart restore thumbnails and metadata before mounting the composer. Full draft
+image bytes are read only for Send or opening the viewer. Removal persists
+immediately; sending consumes the photo draft atomically with the saved user
+turn. First-turn chat creation transfers remaining drafts to that chat, and
+chat deletion removes them. Temporary normalized files are removed after
+preparation, unmount, or abandoned preparation. Async loading checks composer ownership
+before sending, so leaving a chat cannot send its images into another chat.
+
+SQLite stores image data in a separate photos table alongside a small thumbnail,
+dimensions, and encoded length. Opening chats and rendering messages load only
+metadata and thumbnails; bounded context selection happens before reading full
+image data. Caption and images commit atomically with the pending reply. Retry
+reuses the stored images; chat deletion removes them explicitly. The model
+request uses image_url parts with JPEG base64 data URLs and an optional text
+part, through the same streaming endpoint as text/audio. Photos are sent only
+on an explicit Send; selecting or capturing does not run inference.
+
+The catalog cache v4 / format v3 includes image-input capability. Older caches
+are not treated as evidence of image support; the public catalog is refetched.
+The earlier raw-shaped cache may also have lost image capabilities during its
+original normalization, so it is not reused. Settings suggestions
+show Photos and Audio capabilities. Unsupported/unknown image models produce
+an explanation when choosing Camera/Photos, sending images or their follow-ups,
+or retrying image context, without substituting another model. Inference has a
+second capability check after the actual request context is read.
+
+Tapping a sent image or draft thumbnail opens the full normalized photo in a
+native modal. The viewer uses TanStack Query for one local SQLite read, retains
+no full-image query cache after closing, and displays the full image without adding it to the message-list snapshot.
+Opening the viewer does not make a model request.

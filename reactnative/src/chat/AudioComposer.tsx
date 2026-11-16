@@ -1,5 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
+  Alert,
+  Image,
+  ScrollView,
   Keyboard,
   Pressable,
   StyleSheet,
@@ -16,18 +19,30 @@ import X from "lucide-react-native/icons/x";
 
 import type { ModelSettings } from "./openRouter";
 import { useRecording } from "./useRecording";
-import type { AudioInput } from "./history";
+import { AttachmentMenu } from "./AttachmentMenu";
+import { usePhotoAttachments } from "./usePhotoAttachments";
+import { contextHasAudio, contextHasPhotos } from "./context";
+import type {
+  AudioInput,
+  PhotoInput,
+  PhotoReference,
+  Message,
+} from "./history";
 import type { ChatColors } from "./theme";
 import type { PersistentDraft } from "./PersistentDraft";
 import { LiveAudioWaveform, audioTime } from "./AudioWaveform";
 
 type Props = {
   draft: PersistentDraft;
+  onOpenPhoto: (reference: PhotoReference) => void;
+  messages: Message[];
+  audioIssue: string | null;
+  imageIssue: string | null;
   colors: ChatColors;
   visible: boolean;
   disabled: boolean;
   pending: boolean;
-  onSendText: (text: string) => Promise<boolean>;
+  onSendText: (text: string, photos?: PhotoInput[]) => Promise<boolean>;
   onStopReply: () => void;
   settings: ModelSettings;
   onSend: (audio: AudioInput, settings: ModelSettings) => Promise<boolean>;
@@ -35,6 +50,10 @@ type Props = {
 
 export function AudioComposer({
   draft,
+  onOpenPhoto,
+  messages,
+  audioIssue,
+  imageIssue,
   colors,
   visible,
   disabled,
@@ -45,9 +64,24 @@ export function AudioComposer({
   onSend,
 }: Props) {
   const recording = useRecording(visible, (audio) => onSend(audio, settings));
+  const images = usePhotoAttachments(visible, draft);
+  const [menuOpen, setMenuOpen] = useState(false);
   const inputRef = useRef<TextInputInstance>(null);
-  const [hasText, setHasText] = useState(
+  const hasText = useSyncExternalStore(
+    draft.subscribe,
     () => draft.value.text.trim().length > 0,
+  );
+  const textNeedsAudio = useSyncExternalStore(
+    draft.subscribe,
+    () =>
+      audioIssue !== null &&
+      contextHasAudio(messages, draft.value.text, images.photos),
+  );
+  const textNeedsImages = useSyncExternalStore(
+    draft.subscribe,
+    () =>
+      imageIssue !== null &&
+      contextHasPhotos(messages, draft.value.text, images.photos),
   );
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -73,7 +107,7 @@ export function AudioComposer({
         setError(
           cause instanceof Error
             ? cause.message
-            : "Couldn’t read audio. Please try again.",
+            : "Couldn’t read the attachment. Please try again.",
         );
     } finally {
       lockRef.current = false;
@@ -83,37 +117,110 @@ export function AudioComposer({
 
   async function send() {
     if (hasAudio) await recording.send();
-    else
+    else {
+      const photos = images.photos.length ? await images.read() : undefined;
+      if (!aliveRef.current || draft.suspended || !images.isActive()) return;
       await draft.submit(
-        onSendText,
+        async (text) => {
+          const sent = await onSendText(text, photos);
+          return sent;
+        },
         () => {
           inputRef.current?.clear();
-          setHasText(false);
         },
         (text) => {
           if (!aliveRef.current) return;
           inputRef.current?.setNativeProps({ text });
-          setHasText(text.trim().length > 0);
         },
+        images.photos.length > 0,
       );
+    }
   }
 
-  function changeDraft(text: string) {
-    draft.edit(text);
-    const nextHasText = text.trim().length > 0;
-    if (nextHasText !== hasText) setHasText(nextHasText);
+  function explain(message: string) {
+    Alert.alert("Input unavailable", message);
   }
 
   const capture = recording.state;
   const hasAudio = capture.phase === "recording" || capture.clip !== null;
-  const canSend = hasAudio || hasText;
+  const canSend = hasAudio || hasText || images.photos.length > 0;
+  const primaryAudioIssue = pending
+    ? null
+    : !canSend || hasAudio || textNeedsAudio
+      ? audioIssue
+      : null;
+  const primaryIssue = pending
+    ? null
+    : (primaryAudioIssue ??
+      (images.photos.length || textNeedsImages ? imageIssue : null));
+  async function chooseAttachment(source: "camera" | "photos" | "audio") {
+    setMenuOpen(false);
+    const issue = source === "audio" ? audioIssue : imageIssue;
+    if (issue) {
+      explain(issue);
+      return;
+    }
+    if (source === "audio") {
+      if (images.photos.length) {
+        explain("Send or remove your photos before attaching audio.");
+        return;
+      }
+      await recording.attach();
+    } else await images.pick(source);
+  }
   const blocked =
     disabled ||
     working ||
+    images.picking ||
     capture.phase === "preparing" ||
     capture.phase === "sending";
   return (
     <View style={styles.container}>
+      <AttachmentMenu
+        visible={menuOpen && visible}
+        colors={colors}
+        audioIssue={audioIssue}
+        imageIssue={imageIssue}
+        onClose={() => setMenuOpen(false)}
+        onChoose={(source) => {
+          void run(() => chooseAttachment(source));
+        }}
+      />
+      {images.photos.length > 0 && (
+        <ScrollView
+          horizontal
+          style={styles.previewStrip}
+          contentContainerStyle={styles.previews}
+        >
+          {images.photos.map((photo, index) => (
+            <View key={photo.id}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Open attached photo ${index + 1}`}
+                onPress={() => onOpenPhoto({ id: photo.id, draft: true })}
+              >
+                <Image
+                  source={{ uri: `data:image/jpeg;base64,${photo.thumbnail}` }}
+                  style={styles.preview}
+                  accessibilityLabel={`Attached photo ${index + 1}`}
+                />
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Remove photo ${index + 1}`}
+                disabled={blocked || pending}
+                onPress={() => {
+                  void run(() => images.remove(photo.id));
+                }}
+                style={[styles.removePhoto, { backgroundColor: colors.button }]}
+              >
+                <X size={16} color={colors.buttonText} />
+              </Pressable>
+            </View>
+          ))}
+        </ScrollView>
+      )}
+
       {(error ?? capture.error) !== null && (
         <Text
           accessibilityRole="alert"
@@ -130,12 +237,14 @@ export function AudioComposer({
       >
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={
-            hasAudio ? "Discard recording" : "Attach audio file"
-          }
+          accessibilityLabel={hasAudio ? "Discard recording" : "Add attachment"}
           disabled={blocked || pending}
           onPress={() => {
-            void (hasAudio ? recording.discard() : recording.attach());
+            if (hasAudio) void recording.discard();
+            else {
+              Keyboard.dismiss();
+              setMenuOpen(true);
+            }
           }}
           style={[
             styles.iconButton,
@@ -166,7 +275,7 @@ export function AudioComposer({
           placeholder="Message…"
           placeholderTextColor={colors.muted}
           underlineColorAndroid="transparent"
-          onChangeText={changeDraft}
+          onChangeText={(text) => draft.edit(text)}
           multiline
           maxLength={12000}
           textAlignVertical="top"
@@ -188,8 +297,10 @@ export function AudioComposer({
                 : "Record voice message"
           }
           disabled={blocked}
+          accessibilityHint={primaryIssue ?? undefined}
           onPress={() => {
             if (pending) onStopReply();
+            else if (primaryIssue) explain(primaryIssue);
             else if (canSend) void run(send);
             else {
               Keyboard.dismiss();
@@ -198,7 +309,7 @@ export function AudioComposer({
           }}
           style={({ pressed }) => [
             styles.primary,
-            { opacity: blocked ? 0.35 : pressed ? 0.6 : 1 },
+            { opacity: blocked || primaryIssue ? 0.35 : pressed ? 0.6 : 1 },
           ]}
         >
           <View style={[styles.buttonFace, { backgroundColor: colors.button }]}>
@@ -221,6 +332,19 @@ export function AudioComposer({
 }
 
 const styles = StyleSheet.create({
+  previewStrip: { maxHeight: 108, flexGrow: 0 },
+  previews: { gap: 12, paddingVertical: 8, paddingHorizontal: 4 },
+  preview: { width: 88, height: 88, borderRadius: 12 },
+  removePhoto: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    minWidth: 32,
+    minHeight: 32,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   container: { paddingHorizontal: 12, paddingTop: 8, paddingBottom: 10 },
   row: {
     flexDirection: "row",

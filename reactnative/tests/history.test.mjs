@@ -106,7 +106,7 @@ test("future database versions are rejected without resetting data", async () =>
   try {
     await store.initialize();
     await appendTurn(store, "existing", "Keep me", "Original", 1);
-    sqlite.exec("PRAGMA user_version = 7");
+    sqlite.exec("PRAGMA user_version = 9");
     await assert.rejects(store.initialize(), /Unsupported/);
     assert.equal((await store.read()).messages.length, 2);
   } finally {
@@ -173,7 +173,7 @@ test("v2 history migrates without losing messages; audio survives completion and
     await store.initialize();
     await appendTurn(store, "old", "Keep this chat", "Kept", 1);
     sqlite.exec(
-      "DROP TABLE drafts; ALTER TABLE messages DROP COLUMN audio_length; ALTER TABLE messages DROP COLUMN audio_metadata; ALTER TABLE messages DROP COLUMN audio_data; ALTER TABLE messages DROP COLUMN audio_format; PRAGMA user_version=2;",
+      "DROP TABLE draft_photos; DROP TABLE photos; DROP TABLE drafts; ALTER TABLE messages DROP COLUMN audio_length; ALTER TABLE messages DROP COLUMN audio_metadata; ALTER TABLE messages DROP COLUMN audio_data; ALTER TABLE messages DROP COLUMN audio_format; PRAGMA user_version=2;",
     );
     await store.initialize();
     assert.equal((await store.read()).messages[0].text, "Keep this chat");
@@ -224,7 +224,7 @@ test("v3 retained recordings migrate without changing audio or old transcripts",
       audio,
     );
     sqlite.exec(
-      "DROP TABLE drafts; ALTER TABLE messages DROP COLUMN audio_length; ALTER TABLE messages DROP COLUMN audio_metadata; PRAGMA user_version=3;",
+      "DROP TABLE draft_photos; DROP TABLE photos; DROP TABLE drafts; ALTER TABLE messages DROP COLUMN audio_length; ALTER TABLE messages DROP COLUMN audio_metadata; PRAGMA user_version=3;",
     );
     await store.initialize();
     const saved = await store.read();
@@ -234,7 +234,7 @@ test("v3 retained recordings migrate without changing audio or old transcripts",
       format: audio.format,
     });
     assert.equal(saved.messages[1].status, "failed");
-    assert.equal(sqlite.prepare("PRAGMA user_version").get().user_version, 6);
+    assert.equal(sqlite.prepare("PRAGMA user_version").get().user_version, 8);
   } finally {
     sqlite.close();
   }
@@ -305,7 +305,7 @@ test("v4 migration preserves recordings and populates lazy-loading metadata", as
       format: "wav",
     });
     sqlite.exec(
-      "DROP TABLE drafts; ALTER TABLE messages DROP COLUMN audio_length; PRAGMA user_version=4;",
+      "DROP TABLE draft_photos; DROP TABLE photos; DROP TABLE drafts; ALTER TABLE messages DROP COLUMN audio_length; PRAGMA user_version=4;",
     );
     await store.initialize();
     const saved = await store.read();
@@ -324,7 +324,9 @@ test("drafts survive reopening and v5 migration preserves existing conversations
     const first = connect(path);
     await first.store.initialize();
     await appendTurn(first.store, "chat", "Hello", "Hi", 1);
-    first.sqlite.exec("DROP TABLE drafts; PRAGMA user_version = 5");
+    first.sqlite.exec(
+      "DROP TABLE draft_photos; DROP TABLE photos; DROP TABLE drafts; PRAGMA user_version = 5",
+    );
     first.sqlite.close();
     const second = connect(path);
     await second.store.initialize();

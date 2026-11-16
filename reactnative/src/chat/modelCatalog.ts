@@ -1,7 +1,7 @@
 import type { RouterModel } from "./routerMetadata";
 
 export function encodeCatalog(models: RouterModel[]) {
-  return { version: 1, models };
+  return { version: 3, models };
 }
 
 export function decodeCatalog(value: unknown): RouterModel[] {
@@ -9,7 +9,7 @@ export function decodeCatalog(value: unknown): RouterModel[] {
     typeof value !== "object" ||
     value === null ||
     !("version" in value) ||
-    value.version !== 1 ||
+    value.version !== 3 ||
     !("models" in value) ||
     !Array.isArray(value.models) ||
     !value.models.length
@@ -28,6 +28,8 @@ export function decodeCatalog(value: unknown): RouterModel[] {
       !("name" in item) ||
       typeof item.name !== "string" ||
       !item.name.trim() ||
+      !("image" in item) ||
+      typeof item.image !== "boolean" ||
       !("audio" in item) ||
       typeof item.audio !== "boolean" ||
       !("inputPrice" in item) ||
@@ -40,6 +42,7 @@ export function decodeCatalog(value: unknown): RouterModel[] {
       id: item.id,
       name: item.name,
       audio: item.audio,
+      image: item.image,
       inputPrice: item.inputPrice,
       outputPrice: item.outputPrice,
     };

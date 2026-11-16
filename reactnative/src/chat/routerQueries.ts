@@ -12,19 +12,19 @@ type CatalogStorage = {
   read: () => Promise<RouterModel[]>;
   write: (models: RouterModel[]) => Promise<void>;
 };
-const catalogKey = ["openrouter", "models"] as const;
+export const MODEL_CATALOG_KEY = ["openrouter", "models"] as const;
 
 export function modelCatalogQuery(
   storage: CatalogStorage,
   fetcher: typeof fetch = fetch,
 ) {
   return queryOptions({
-    queryKey: catalogKey,
+    queryKey: MODEL_CATALOG_KEY,
     staleTime: Infinity,
     gcTime: Infinity,
     retry: false,
     queryFn: async ({ signal, client }) => {
-      if (!client.getQueryData(catalogKey)) {
+      if (!client.getQueryData(MODEL_CATALOG_KEY)) {
         try {
           return await storage.read();
         } catch {

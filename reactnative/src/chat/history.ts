@@ -13,6 +13,17 @@ export type AudioAttachment = AudioMetadata & {
   id: number;
   encodedLength: number;
 };
+export type PhotoReference = { id: number; draft: boolean };
+export type PhotoInput = {
+  data: string;
+  thumbnail: string;
+  width: number;
+  height: number;
+};
+export type PhotoAttachment = Omit<PhotoInput, "data"> & {
+  id: number;
+  encodedLength: number;
+};
 export type Message = {
   id: number;
   role: "user" | "assistant";
@@ -22,9 +33,11 @@ export type Message = {
   error: string | null;
   model: string | null;
   audio?: AudioAttachment | null;
+  photos?: PhotoAttachment[];
 };
-export type PromptMessage = Omit<Message, "audio"> & {
+export type PromptMessage = Omit<Message, "audio" | "photos"> & {
   audio?: AudioInput | null;
+  photos?: PhotoInput[];
 };
 export type SavedChat = {
   id: string;
@@ -55,7 +68,7 @@ export class HistoryStore {
         "PRAGMA user_version",
       );
       let version = row?.user_version ?? 0;
-      if (version > 6) throw new Error("Unsupported history database version");
+      if (version > 8) throw new Error("Unsupported history database version");
       if (version === 0) {
         await tx.execAsync(`
           CREATE TABLE chats (id TEXT PRIMARY KEY NOT NULL, title TEXT NOT NULL, updated_at INTEGER NOT NULL);
@@ -102,6 +115,28 @@ export class HistoryStore {
         CREATE TABLE drafts (chat_key TEXT PRIMARY KEY NOT NULL, text TEXT NOT NULL);
         PRAGMA user_version = 6;
       `);
+      if (version <= 6)
+        await tx.execAsync(`
+          CREATE TABLE photos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+            data TEXT NOT NULL, thumbnail TEXT NOT NULL,
+            width INTEGER NOT NULL, height INTEGER NOT NULL,
+            encoded_length INTEGER NOT NULL
+          );
+          CREATE INDEX photos_by_message ON photos(message_id, id);
+          PRAGMA user_version = 7;
+        `);
+      if (version <= 7)
+        await tx.execAsync(`
+          CREATE TABLE draft_photos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_key TEXT NOT NULL, data TEXT NOT NULL, thumbnail TEXT NOT NULL,
+            width INTEGER NOT NULL, height INTEGER NOT NULL, encoded_length INTEGER NOT NULL
+          );
+          CREATE INDEX draft_photos_by_chat ON draft_photos(chat_key, id);
+          PRAGMA user_version = 8;
+        `);
       await tx.runAsync(
         `UPDATE messages SET status = 'failed', error = ? WHERE status = 'pending'`,
         "The app closed before this reply finished. You can retry it.",
@@ -141,8 +176,24 @@ export class HistoryStore {
         FROM messages WHERE chat_id = ? ORDER BY id`,
       chatId,
     );
+    const photos = await db.getAllAsync<
+      PhotoAttachment & { messageId: number }
+    >(
+      `SELECT p.id, p.message_id AS messageId, p.thumbnail, p.width, p.height,
+        p.encoded_length AS encodedLength FROM photos p JOIN messages m ON m.id = p.message_id
+        WHERE m.chat_id = ? ORDER BY p.id`,
+      chatId,
+    );
+    const byMessage = new Map<number, PhotoAttachment[]>();
+    for (const { messageId, ...photo } of photos) {
+      const group = byMessage.get(messageId) ?? [];
+      group.push(photo);
+      byMessage.set(messageId, group);
+    }
     return rows.map(
       ({ audioFormat, audioMetadata, audioLength, ...message }) => {
+        if (byMessage.has(message.id))
+          message.photos = byMessage.get(message.id);
         if (audioLength === null || !audioFormat) return message;
         const metadata = audioMetadata
           ? (JSON.parse(audioMetadata) as Pick<
@@ -177,13 +228,106 @@ export class HistoryStore {
             ...ids,
           );
     const recordings = new Map(rows.map((row) => [row.id, row.data]));
-    return selected.map(({ audio, ...message }) => {
+    const photoIds = selected.flatMap(
+      (message) => message.photos?.map((photo) => photo.id) ?? [],
+    );
+    const photoRows = photoIds.length
+      ? await this.db.getAllAsync<{ id: number; data: string }>(
+          `SELECT id, data FROM photos WHERE id IN (${photoIds.map(() => "?").join(",")})`,
+          ...photoIds,
+        )
+      : [];
+    const photoData = new Map(photoRows.map((row) => [row.id, row.data]));
+    return selected.map(({ audio, photos, ...message }) => {
+      const loadedPhotos = photos?.map((photo) => {
+        const data = photoData.get(photo.id);
+        if (!data)
+          throw new Error("A photo is missing from this conversation.");
+        return {
+          data,
+          thumbnail: photo.thumbnail,
+          width: photo.width,
+          height: photo.height,
+        };
+      });
+      if (loadedPhotos?.length) return { ...message, photos: loadedPhotos };
       if (!audio) return message;
       const data = recordings.get(message.id);
       if (!data)
         throw new Error("A recording is missing from this conversation.");
       return { ...message, audio: { format: audio.format, data } };
     });
+  }
+
+  async readPhoto(reference: PhotoReference): Promise<PhotoInput> {
+    const photo = await this.db.getFirstAsync<PhotoInput>(
+      `SELECT data, thumbnail, width, height FROM ${reference.draft ? "draft_photos" : "photos"} WHERE id = ?`,
+      reference.id,
+    );
+    if (!photo) throw new Error("This photo is no longer available.");
+    return { ...photo };
+  }
+
+  readPhotoDraft(
+    chatId: string | null,
+    db: Reader = this.db,
+  ): Promise<PhotoAttachment[]> {
+    return db.getAllAsync<PhotoAttachment>(
+      "SELECT id, thumbnail, width, height, encoded_length AS encodedLength FROM draft_photos WHERE chat_key = ? ORDER BY id",
+      chatId ?? "",
+    );
+  }
+  async readPhotoDraftData(chatId: string | null): Promise<PhotoInput[]> {
+    const rows = await this.db.getAllAsync<PhotoInput>(
+      "SELECT data, thumbnail, width, height FROM draft_photos WHERE chat_key = ? ORDER BY id",
+      chatId ?? "",
+    );
+    return rows.map((row) => ({ ...row }));
+  }
+  async addPhotoDraft(chatId: string | null, photos: PhotoInput[]) {
+    let saved: PhotoAttachment[] = [];
+    await this.db.withExclusiveTransactionAsync(async (tx) => {
+      if (
+        chatId !== null &&
+        !(await tx.getFirstAsync("SELECT id FROM chats WHERE id = ?", chatId))
+      )
+        throw new Error("Chat no longer exists.");
+      const existing = await tx.getFirstAsync<{ count: number; size: number }>(
+        "SELECT COUNT(*) AS count, COALESCE(SUM(encoded_length), 0) AS size FROM draft_photos WHERE chat_key = ?",
+        chatId ?? "",
+      );
+      if (
+        (existing?.count ?? 0) + photos.length > 4 ||
+        (existing?.size ?? 0) +
+          photos.reduce((sum, photo) => sum + photo.data.length, 0) >
+          Math.ceil((8 * 1024 * 1024) / 3) * 4
+      )
+        throw new Error("Choose up to four photos under 8 MB combined.");
+      for (const photo of photos)
+        await tx.runAsync(
+          "INSERT INTO draft_photos (chat_key, data, thumbnail, width, height, encoded_length) VALUES (?, ?, ?, ?, ?, ?)",
+          chatId ?? "",
+          photo.data,
+          photo.thumbnail,
+          photo.width,
+          photo.height,
+          photo.data.length,
+        );
+      saved = await this.readPhotoDraft(chatId, tx);
+    });
+    return saved;
+  }
+  async removePhotoDraft(chatId: string | null, id: number) {
+    let saved: PhotoAttachment[] = [];
+    await this.db.withExclusiveTransactionAsync(async (tx) => {
+      await tx.runAsync(
+        "DELETE FROM draft_photos WHERE chat_key = ? AND id = ?",
+        chatId ?? "",
+        id,
+      );
+      saved = await this.readPhotoDraft(chatId, tx);
+    });
+    return saved;
   }
 
   // The empty key belongs to the unfinished new chat. Normal keys are chat IDs.
@@ -249,6 +393,7 @@ export class HistoryStore {
     model: string,
     now: number,
     audio?: AudioInput,
+    photos: PhotoInput[] = [],
   ) {
     return this.write(async (tx) => {
       const existing = await tx.getFirstAsync(
@@ -259,7 +404,10 @@ export class HistoryStore {
         `INSERT INTO chats (id, title, updated_at) VALUES (?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at`,
         id,
-        text.replace(/\s+/g, " ").trim().slice(0, 70),
+        (text || (photos.length ? "Photo message" : "Voice message"))
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 70),
         now,
       );
       if (!existing)
@@ -267,6 +415,13 @@ export class HistoryStore {
           "UPDATE drafts SET chat_key = ? WHERE chat_key = ''",
           id,
         );
+      if (!existing)
+        await tx.runAsync(
+          "UPDATE draft_photos SET chat_key = ? WHERE chat_key = ''",
+          id,
+        );
+      if (photos.length)
+        await tx.runAsync("DELETE FROM draft_photos WHERE chat_key = ?", id);
       if (!audio)
         await tx.runAsync("DELETE FROM drafts WHERE chat_key = ?", id);
       const user = await tx.runAsync(
@@ -284,6 +439,17 @@ export class HistoryStore {
           : null,
         audio?.data.length ?? null,
       );
+      for (const photo of photos) {
+        await tx.runAsync(
+          "INSERT INTO photos (message_id, data, thumbnail, width, height, encoded_length) VALUES (?, ?, ?, ?, ?, ?)",
+          user.lastInsertRowId,
+          photo.data,
+          photo.thumbnail,
+          photo.width,
+          photo.height,
+          photo.data.length,
+        );
+      }
       await tx.runAsync(
         `INSERT INTO messages (chat_id, role, text, status, reply_to, model) VALUES (?, 'assistant', '', 'pending', ?, ?)`,
         id,
@@ -346,6 +512,11 @@ export class HistoryStore {
         id,
       );
       await tx.runAsync("DELETE FROM drafts WHERE chat_key = ?", id);
+      await tx.runAsync("DELETE FROM draft_photos WHERE chat_key = ?", id);
+      await tx.runAsync(
+        "DELETE FROM photos WHERE message_id IN (SELECT id FROM messages WHERE chat_id = ?)",
+        id,
+      );
       await tx.runAsync("DELETE FROM messages WHERE chat_id = ?", id);
       await tx.runAsync("DELETE FROM chats WHERE id = ?", id);
     });

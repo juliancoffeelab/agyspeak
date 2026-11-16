@@ -1,5 +1,5 @@
 import { createParser } from "eventsource-parser";
-import type { AudioInput, PromptMessage } from "./history";
+import type { AudioInput, PhotoInput, PromptMessage } from "./history";
 import { selectContext } from "./context.ts";
 
 export const AUDIO_MODEL = "google/gemini-3.8-flash";
@@ -24,6 +24,29 @@ export function validateAudio(audio: AudioInput) {
     throw new Error("Audio must be nonempty and under 8 MB.");
 }
 
+export const MAX_PHOTOS = 4;
+export const MAX_PHOTO_BYTES = 8 * 1024 * 1024;
+export function validatePhotos(photos: PhotoInput[]) {
+  if (!photos.length || photos.length > MAX_PHOTOS)
+    throw new Error("Choose between one and four photos.");
+  let bytes = 0;
+  for (const photo of photos) {
+    if (
+      !photo.data ||
+      !/^[A-Za-z0-9+/]+={0,2}$/.test(photo.data) ||
+      !photo.thumbnail ||
+      !Number.isFinite(photo.width) ||
+      !Number.isFinite(photo.height) ||
+      photo.width <= 0 ||
+      photo.height <= 0
+    )
+      throw new Error("Couldn’t read that photo. Choose it again.");
+    bytes += Math.ceil((photo.data.length * 3) / 4);
+  }
+  if (bytes > MAX_PHOTO_BYTES)
+    throw new Error("Keep photos under 8 MB per message.");
+}
+
 export type ModelSettings = { apiKey: string; model: string };
 export type Completion = { text: string; model: string; cost: number | null };
 export type ReplyFunction = (
@@ -46,10 +69,25 @@ export function requestMessages(messages: PromptMessage[]) {
       | (
           | { type: "text"; text: string }
           | { type: "input_audio"; input_audio: AudioInput }
+          | { type: "image_url"; image_url: { url: string } }
         )[];
   }[] = [];
   for (const message of selectContext(messages)) {
-    if (message.audio) {
+    if (message.photos?.length) {
+      validatePhotos(message.photos);
+      result.push({
+        role: message.role,
+        content: [
+          ...(message.text
+            ? [{ type: "text" as const, text: message.text }]
+            : []),
+          ...message.photos.map((photo) => ({
+            type: "image_url" as const,
+            image_url: { url: `data:image/jpeg;base64,${photo.data}` },
+          })),
+        ],
+      });
+    } else if (message.audio) {
       validateAudio(message.audio);
       const { data, format } = message.audio;
       result.push({
@@ -112,7 +150,7 @@ export async function completeReply(
   fetcher: typeof fetch = fetch,
 ): Promise<Completion> {
   const context = requestMessages(messages);
-  const audioTurn = context.some((message) => Array.isArray(message.content));
+  const mediaTurn = context.some((message) => Array.isArray(message.content));
   const controller = new AbortController();
   const abort = () => controller.abort();
   signal.addEventListener("abort", abort, { once: true });
@@ -132,7 +170,7 @@ export async function completeReply(
         body: JSON.stringify({
           model: settings.model,
           messages: context,
-          max_tokens: audioTurn ? 1024 : 512,
+          max_tokens: mediaTurn ? 1024 : 512,
           stream: true,
           reasoning:
             settings.model === AUDIO_MODEL

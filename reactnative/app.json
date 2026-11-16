@@ -30,8 +30,16 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "Scan an OpenRouter key QR code.",
+          "cameraPermission": "Take photos or scan an OpenRouter key QR code.",
           "recordAudioAndroid": false
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Choose photos to send in a conversation.",
+          "cameraPermission": "Take photos to send in a conversation.",
+          "microphonePermission": "Record voice messages."
         }
       ],
       "./plugins/withReleaseSigning"

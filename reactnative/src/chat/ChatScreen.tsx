@@ -1,5 +1,13 @@
-import { useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
+  useCallback,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
+import {
+  Alert,
+  Image,
   Keyboard,
   KeyboardAvoidingView,
   Platform,
@@ -11,10 +19,17 @@ import {
 import { LegendList, type LegendListRef } from "@legendapp/list/react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { PhotoViewer } from "./PhotoViewer";
+import { contextHasAudio, contextHasPhotos } from "./context";
 import { AudioMessage } from "./AudioWaveform";
 import { AudioComposer } from "./AudioComposer";
 import type { ModelSettings } from "./openRouter";
-import type { AudioInput, ChatHistory } from "./history";
+import type {
+  AudioInput,
+  PhotoInput,
+  PhotoReference,
+  ChatHistory,
+} from "./history";
 import { ChatHeader } from "./ChatHeader";
 import type { ChatColors } from "./theme";
 import { useKeyboardVisible } from "./useKeyboardVisible";
@@ -31,12 +46,15 @@ type ChatScreenProps = {
   pending: PendingReply | null;
   connected: boolean;
   settings: ModelSettings;
+  audioIssue: string | null;
+  imageIssue: string | null;
+  onReadPhoto: (reference: PhotoReference) => Promise<PhotoInput>;
   onSendAudio: (audio: AudioInput, settings: ModelSettings) => Promise<boolean>;
   onStop: () => void;
   onRetryReply: (id: number) => void;
   onOpenSettings: () => void;
   draft: PersistentDraft | null;
-  onSend: (text: string) => Promise<boolean>;
+  onSend: (text: string, photos?: PhotoInput[]) => Promise<boolean>;
   onNewChat: () => void;
   onOpenHistory: () => void;
   onRetry: () => void;
@@ -59,13 +77,18 @@ export function ChatScreen({
   onOpenHistory,
   onRetry,
   settings,
+  audioIssue,
+  imageIssue,
   onSendAudio,
+  onReadPhoto,
 }: ChatScreenProps) {
+  const [photo, setPhoto] = useState<PhotoReference | null>(null);
+  const closePhoto = useCallback(() => setPhoto(null), []);
   const [scrollRequest, setScrollRequest] = useState(0);
   const keyboardVisible = useKeyboardVisible();
 
-  async function sendMessage(text: string) {
-    const sent = await onSend(text);
+  async function sendMessage(text: string, photos?: PhotoInput[]) {
+    const sent = await onSend(text, photos);
     if (sent) setScrollRequest((value) => value + 1);
     return sent;
   }
@@ -78,6 +101,13 @@ export function ChatScreen({
         style={styles.screen}
         edges={keyboardVisible ? ["top", "left", "right"] : undefined}
       >
+        {photo !== null && (
+          <PhotoViewer
+            reference={photo}
+            load={onReadPhoto}
+            onClose={closePhoto}
+          />
+        )}
         <ChatHeader
           colors={colors}
           mode="chat"
@@ -120,6 +150,15 @@ export function ChatScreen({
           history={history}
           scrollRequest={scrollRequest}
           pending={pending}
+          audioIssue={
+            (audioIssue && contextHasAudio(history?.messages ?? [], "")
+              ? audioIssue
+              : null) ??
+            (imageIssue && contextHasPhotos(history?.messages ?? [], "")
+              ? imageIssue
+              : null)
+          }
+          onOpenPhoto={setPhoto}
           onRetryReply={onRetryReply}
           busy={busy || pending !== null}
         />
@@ -143,6 +182,10 @@ export function ChatScreen({
           <AudioComposer
             key={draft.key}
             draft={draft}
+            messages={history?.messages ?? []}
+            onOpenPhoto={setPhoto}
+            audioIssue={audioIssue}
+            imageIssue={imageIssue}
             colors={colors}
             visible={visible}
             disabled={!history || !connected || busy}
@@ -166,14 +209,17 @@ function MessageList({
   colors,
   history,
   scrollRequest,
+  onOpenPhoto,
   pending,
+  audioIssue,
   onRetryReply,
   busy,
 }: Pick<
   ChatScreenProps,
-  "colors" | "history" | "onRetryReply" | "busy" | "pending"
+  "colors" | "history" | "onRetryReply" | "busy" | "pending" | "audioIssue"
 > & {
   scrollRequest: number;
+  onOpenPhoto: (reference: PhotoReference) => void;
 }) {
   const listRef = useRef<LegendListRef>(null);
   const handledSendRef = useRef(scrollRequest);
@@ -227,7 +273,25 @@ function MessageList({
               ]
             }
           >
-            {item.audio ? (
+            {item.photos?.map((photo, index) => (
+              <Pressable
+                key={photo.id}
+                accessibilityRole="button"
+                accessibilityLabel={`Open photo ${index + 1}`}
+                onPress={() => onOpenPhoto({ id: photo.id, draft: false })}
+              >
+                <Image
+                  source={{ uri: `data:image/jpeg;base64,${photo.thumbnail}` }}
+                  accessibilityLabel={`Photo ${index + 1}`}
+                  style={[
+                    styles.photo,
+                    { aspectRatio: photo.width / photo.height },
+                  ]}
+                  resizeMode="contain"
+                />
+              </Pressable>
+            ))}
+            {item.photos?.length && !item.text ? null : item.audio ? (
               <AudioMessage audio={item.audio} colors={colors} />
             ) : pending?.messageId === item.id ? (
               <StreamingReply pending={pending} colors={colors} />
@@ -256,8 +320,16 @@ function MessageList({
                     accessibilityRole="button"
                     accessibilityLabel="Retry reply"
                     disabled={busy}
-                    onPress={() => onRetryReply(item.id)}
-                    style={styles.retryReply}
+                    onPress={() => {
+                      if (audioIssue)
+                        Alert.alert("Input unavailable", audioIssue);
+                      else onRetryReply(item.id);
+                    }}
+                    accessibilityHint={audioIssue ?? undefined}
+                    style={[
+                      styles.retryReply,
+                      { opacity: audioIssue ? 0.35 : 1 },
+                    ]}
                   >
                     <Text style={[styles.actionText, { color: colors.text }]}>
                       Retry
@@ -307,5 +379,6 @@ const styles = StyleSheet.create({
   userMessage: { alignSelf: "flex-end", alignItems: "flex-end" },
   author: { fontSize: 12, fontWeight: "500" },
   bubble: { borderRadius: 18, paddingHorizontal: 16, paddingVertical: 12 },
+  photo: { width: 220, maxHeight: 280, borderRadius: 10, marginVertical: 4 },
   messageText: { fontSize: 17, lineHeight: 26 },
 });
