@@ -24,6 +24,7 @@
     "lucide-react-native": "^1.67.0",
     "react": "19.3.0",
     "react-native": "0.88.0",
+    "react-native-enriched-markdown": "^1.2.0",
     "react-native-safe-area-context": "~5.10.1",
     "react-native-svg": "15.16.0"
   },
@@ -59,5 +60,10 @@
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
-  "private": true
+  "private": true,
+  "enriched-markdown": {
+    "enableCodeHighlight": false,
+    "enableMath": false,
+    "enableVideo": false
+  }
 }

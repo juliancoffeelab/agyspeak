@@ -478,3 +478,22 @@ so library images are downsampled while decoding rather than decoded at full
 sensor resolution first.
 
 The shared catalog parser requires the live model record’s `endpoints` array to include `/api/v1/chat/completions`, as well as retaining the text-output filter. Batch-only, Responses-only, missing/invalid endpoint metadata, and non-text-output records are excluded from both model lists. Format v4 invalidates earlier caches so old unfiltered entries are not reused. This filtering uses the public catalog and does not probe models with inference requests. Explicit custom model IDs remain available.
+
+
+## Reply Markdown
+
+Active replies keep their existing selectable plain-text stream and 40 ms update
+coalescing. Only after completion, Stop, or a failed stream does a nonempty
+assistant reply mount `MarkdownMessage`, a memoized native
+react-native-enriched-markdown renderer. Reopened assistant replies use the same
+renderer. User messages, photo captions, and empty/pending placeholders stay
+plain text. SQLite and model context retain the original Markdown unchanged;
+there is no incremental Markdown parsing, Worklets, or streaming repair layer.
+
+The initial renderer uses GitHub-flavored Markdown, themed headings/lists/quotes,
+inline and fenced code, tables, and explicit HTTP(S) link taps through platform
+Linking. Task checkboxes are read-only, so tapping cannot alter a saved response.
+Selection/copy is native. Math parsing and the optional math, syntax-highlighting,
+and video native features are disabled in package.json. The package's scoped
+postinstall is allowed by pnpm, but those disabled features require no native
+asset downloads. Native dependency changes require prebuild and a new APK.

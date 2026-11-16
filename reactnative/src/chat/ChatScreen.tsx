@@ -20,6 +20,7 @@ import { LegendList, type LegendListRef } from "@legendapp/list/react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { ChatModelPicker } from "./ChatModelPicker";
+import { MarkdownMessage } from "./MarkdownMessage";
 import { PhotoViewer } from "./PhotoViewer";
 import { contextHasAudio, contextHasPhotos } from "./context";
 import { AudioMessage } from "./AudioWaveform";
@@ -317,6 +318,10 @@ function MessageList({
               <AudioMessage audio={item.audio} colors={colors} />
             ) : pending?.messageId === item.id ? (
               <StreamingReply pending={pending} colors={colors} />
+            ) : item.role === "assistant" &&
+              item.status !== "pending" &&
+              item.text ? (
+              <MarkdownMessage text={item.text} colors={colors} />
             ) : (
               <Text
                 selectable
