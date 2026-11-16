@@ -1,0 +1,3 @@
+interface:
+  display_name: "Design Audit"
+  short_description: "Trace workflows and audit design complexity against values"
