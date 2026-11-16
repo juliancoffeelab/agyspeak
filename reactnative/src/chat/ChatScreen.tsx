@@ -20,6 +20,8 @@ import { LegendList, type LegendListRef } from "@legendapp/list/react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { ChatModelPicker } from "./ChatModelPicker";
+import { ResponseActions } from "./ResponseActions";
+import { useReplySpeech } from "./useReplySpeech";
 import { MarkdownMessage } from "./MarkdownMessage";
 import { PhotoViewer } from "./PhotoViewer";
 import { contextHasAudio, contextHasPhotos } from "./context";
@@ -93,6 +95,7 @@ export function ChatScreen({
   const closePhoto = useCallback(() => setPhoto(null), []);
   const [scrollRequest, setScrollRequest] = useState(0);
   const keyboardVisible = useKeyboardVisible();
+  useReplySpeech(visible && !choosingModel, history?.activeId);
 
   async function sendMessage(text: string, photos?: PhotoInput[]) {
     const sent = await onSend(text, photos);
@@ -335,6 +338,16 @@ function MessageList({
                       : "Reply failed.")}
               </Text>
             )}
+            {item.role === "assistant" &&
+              item.status !== "pending" &&
+              item.text.trim() && (
+                <ResponseActions
+                  id={item.id}
+                  text={item.text}
+                  elapsedMillis={item.elapsedMillis}
+                  colors={colors}
+                />
+              )}
             {(item.status === "failed" || item.status === "cancelled") && (
               <View>
                 {item.error !== null && (

@@ -46,12 +46,12 @@ test("v8 migration preserves history and restores the last recorded model", asyn
     await store.initialize();
     await appendTurn(store, "old", "question", "reply", 1);
     sqlite.exec(
-      "ALTER TABLE chats DROP COLUMN selected_model; ALTER TABLE app_state DROP COLUMN draft_model; PRAGMA user_version = 8",
+      "ALTER TABLE messages DROP COLUMN elapsed_millis; ALTER TABLE chats DROP COLUMN selected_model; ALTER TABLE app_state DROP COLUMN draft_model; PRAGMA user_version = 8",
     );
     await store.initialize();
     assert.equal((await store.read()).selectedModel, "test/model");
     assert.equal((await store.read()).messages.length, 2);
-    assert.equal(sqlite.prepare("PRAGMA user_version").get().user_version, 9);
+    assert.equal(sqlite.prepare("PRAGMA user_version").get().user_version, 10);
   } finally {
     sqlite.close();
   }

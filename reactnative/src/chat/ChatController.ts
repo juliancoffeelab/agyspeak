@@ -28,13 +28,14 @@ export type ChatState = {
   pending: PendingReply | null;
   error: string | null;
 };
-type Run = PendingReply & { abort: AbortController };
+type Run = PendingReply & { abort: AbortController; startedAt: number };
 
 export class ChatController {
   private readonly store: HistoryStore;
   private readonly reply: ReplyFunction;
   private readonly imageIssue: (model: string) => string | null;
   private readonly audioIssue: (model: string) => string | null;
+  private readonly now: () => number;
   private readonly createId: () => string;
   private state: ChatState;
   private readonly listeners = new Set<() => void>();
@@ -52,8 +53,10 @@ export class ChatController {
     audioIssue: (model: string) => string | null,
     imageIssue: (model: string) => string | null,
     initialPhotos: PhotoAttachment[] = [],
+    now: () => number = () => performance.now(),
   ) {
     this.store = store;
+    this.now = now;
     this.audioIssue = audioIssue;
     this.imageIssue = imageIssue;
     this.reply = reply;
@@ -150,6 +153,7 @@ export class ChatController {
       this.publish({ error: "Connect OpenRouter in Settings first." });
       return false;
     }
+    const startedAt = this.now();
     if (!(await this.change(action)) || this.disposed) return false;
     const { history } = this.state;
     const pending = history.messages.at(-1);
@@ -159,6 +163,7 @@ export class ChatController {
       messageId: pending.id,
       abort: new AbortController(),
       stream: new StreamingText(),
+      startedAt,
     };
     this.active = run;
     this.publish({
@@ -320,6 +325,7 @@ export class ChatController {
         },
       );
       if (this.active !== run || run.abort.signal.aborted) return;
+      const elapsedMillis = Math.max(0, Math.round(this.now() - run.startedAt));
       const saved = await this.write(() =>
         this.store.finishReply(
           run.messageId,
@@ -327,6 +333,7 @@ export class ChatController {
           completion.text,
           null,
           completion.model,
+          elapsedMillis,
         ),
       );
       if (this.active !== run) return;
@@ -345,6 +352,7 @@ export class ChatController {
         cause instanceof Error
           ? cause.message
           : "The request failed. You can retry it.";
+      const elapsedMillis = Math.max(0, Math.round(this.now() - run.startedAt));
       try {
         const saved = await this.write(() =>
           this.store.finishReply(
@@ -352,6 +360,8 @@ export class ChatController {
             "failed",
             run.stream.latest,
             error,
+            null,
+            elapsedMillis,
           ),
         );
         if (this.active !== run) return;
@@ -374,6 +384,7 @@ export class ChatController {
     this.active = null;
     run.abort.abort();
     run.stream.close();
+    const elapsedMillis = Math.max(0, Math.round(this.now() - run.startedAt));
     try {
       this.publish({
         pending: null,
@@ -383,6 +394,8 @@ export class ChatController {
             "cancelled",
             run.stream.latest,
             "Stopped. You can retry this reply.",
+            null,
+            elapsedMillis,
           ),
         ),
       });

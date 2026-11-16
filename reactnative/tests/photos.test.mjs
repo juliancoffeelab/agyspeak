@@ -62,12 +62,12 @@ test("version-six upgrade preserves existing messages and drafts", async () => {
     await store.beginReply("old", "existing message", "text", 1);
     await store.saveDraft("old", "existing draft");
     sqlite.exec(
-      "ALTER TABLE chats DROP COLUMN selected_model; ALTER TABLE app_state DROP COLUMN draft_model; DROP TABLE draft_photos; DROP TABLE photos; PRAGMA user_version = 6",
+      "ALTER TABLE messages DROP COLUMN elapsed_millis; ALTER TABLE chats DROP COLUMN selected_model; ALTER TABLE app_state DROP COLUMN draft_model; DROP TABLE draft_photos; DROP TABLE photos; PRAGMA user_version = 6",
     );
     await store.initialize();
     assert.equal((await store.read()).messages[0].text, "existing message");
     assert.equal(await store.readDraft("old"), "existing draft");
-    assert.equal(sqlite.prepare("PRAGMA user_version").get().user_version, 9);
+    assert.equal(sqlite.prepare("PRAGMA user_version").get().user_version, 10);
   } finally {
     sqlite.close();
   }

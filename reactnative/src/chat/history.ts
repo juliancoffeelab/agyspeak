@@ -32,6 +32,7 @@ export type Message = {
   replyTo: number | null;
   error: string | null;
   model: string | null;
+  elapsedMillis?: number | null;
   audio?: AudioAttachment | null;
   photos?: PhotoAttachment[];
 };
@@ -69,7 +70,7 @@ export class HistoryStore {
         "PRAGMA user_version",
       );
       let version = row?.user_version ?? 0;
-      if (version > 9) throw new Error("Unsupported history database version");
+      if (version > 10) throw new Error("Unsupported history database version");
       if (version === 0) {
         await tx.execAsync(`
           CREATE TABLE chats (id TEXT PRIMARY KEY NOT NULL, title TEXT NOT NULL, updated_at INTEGER NOT NULL);
@@ -150,6 +151,10 @@ export class HistoryStore {
           PRAGMA user_version = 9;
         `);
       }
+      if (version <= 9)
+        await tx.execAsync(
+          "ALTER TABLE messages ADD COLUMN elapsed_millis INTEGER; PRAGMA user_version = 10;",
+        );
       await tx.runAsync(
         `UPDATE messages SET status = 'failed', error = ? WHERE status = 'pending'`,
         "The app closed before this reply finished. You can retry it.",
@@ -195,7 +200,7 @@ export class HistoryStore {
         audioLength: number | null;
       }
     >(
-      `SELECT id, role, text, status, reply_to AS replyTo, error, model,
+      `SELECT id, role, text, status, reply_to AS replyTo, error, model, elapsed_millis AS elapsedMillis,
         audio_format AS audioFormat, audio_metadata AS audioMetadata, audio_length AS audioLength
         FROM messages WHERE chat_id = ? ORDER BY id`,
       chatId,
@@ -513,7 +518,7 @@ export class HistoryStore {
   retryReply(id: number, model: string, now: number) {
     return this.write(async (tx) => {
       const result = await tx.runAsync(
-        `UPDATE messages SET status = 'pending', text = '', error = NULL, model = ?
+        `UPDATE messages SET status = 'pending', text = '', error = NULL, elapsed_millis = NULL, model = ?
         WHERE id = ? AND role = 'assistant' AND status IN ('failed', 'cancelled')
         AND NOT EXISTS (SELECT 1 FROM messages newer WHERE newer.chat_id = messages.chat_id AND newer.id > messages.id)`,
         model,
@@ -537,14 +542,16 @@ export class HistoryStore {
     text: string,
     error: string | null,
     model: string | null = null,
+    elapsedMillis: number | null = null,
   ) {
     return this.write(async (tx) => {
       await tx.runAsync(
-        `UPDATE messages SET status = ?, text = ?, error = ?, model = COALESCE(?, model) WHERE id = ? AND status = 'pending'`,
+        `UPDATE messages SET status = ?, text = ?, error = ?, model = COALESCE(?, model), elapsed_millis = ? WHERE id = ? AND status = 'pending'`,
         status,
         text,
         error,
         model,
+        elapsedMillis,
         id,
       );
     });

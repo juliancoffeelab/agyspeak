@@ -10,6 +10,7 @@ import {
 import { getDocumentAsync } from "expo-document-picker";
 import { File } from "expo-file-system";
 
+import { replySpeech } from "./replySpeech";
 import type { AudioInput } from "./history";
 import { AUDIO_FORMATS, MAX_AUDIO_BYTES } from "./openRouter";
 import { RecordingSession, type RecordingClip } from "./RecordingSession";
@@ -34,6 +35,9 @@ export function useRecording(
           (await getRecordingPermissionsAsync()).granted ||
           (await requestRecordingPermissionsAsync()).granted,
         prepare: async () => {
+          replySpeech.setRecording(true);
+          if (!(await replySpeech.stop()))
+            throw new Error("Couldn’t stop read-aloud before recording.");
           await setAudioModeAsync({
             allowsRecording: true,
             playsInSilentMode: true,
@@ -41,7 +45,16 @@ export function useRecording(
           await recorder.prepareToRecordAsync();
         },
         record: () => recorder.record({ forDuration: 120 }),
-        stop: () => recorder.stop(),
+        stop: async () => {
+          try {
+            await recorder.stop();
+          } finally {
+            await setAudioModeAsync({
+              allowsRecording: false,
+              playsInSilentMode: true,
+            });
+          }
+        },
         status: () => recorder.getStatus(),
         uri: () => recorder.uri,
         remove,
@@ -50,6 +63,12 @@ export function useRecording(
   );
   const state = useSyncExternalStore(session.subscribe, session.getSnapshot);
 
+  useEffect(() => {
+    replySpeech.setRecording(
+      state.phase === "preparing" || state.phase === "recording",
+    );
+    return () => replySpeech.setRecording(false);
+  }, [state.phase]);
   useEffect(() => {
     session.setActive(visible && AppState.currentState === "active");
     const listener = AppState.addEventListener("change", (next) =>

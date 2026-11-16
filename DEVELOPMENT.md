@@ -497,3 +497,57 @@ Selection/copy is native. Math parsing and the optional math, syntax-highlightin
 and video native features are disabled in package.json. The package's scoped
 postinstall is allowed by pnpm, but those disabled features require no native
 asset downloads. Native dependency changes require prebuild and a new APK.
+
+
+## Answer actions and built-in speech
+
+Nonempty completed/stopped/failed assistant replies have a compact footer with
+Read aloud / Stop, Copy response, and the recorded response duration when known.
+Copy keeps the original Markdown. Read aloud parses Markdown into spoken prose
+using markdown-it: headings, emphasis and link labels retain their text, inline
+code is spoken, and fenced/indented code and HTML blocks are omitted. Long text
+is split to respect the platform's utterance limit; no model requests are made.
+
+Expo Speech uses the device's default TTS engine and voice. SpeechSession owns
+one active reply, serializes native Stop calls,
+and ignores stale callbacks after interruption or switching replies. Native
+voice readiness is awaited before enqueueing utterances, so Stop during cold
+initialization cannot leave speech queued to start later. Leaving the chat,
+changing chats, backgrounding, or unmounting stops playback. Recording stops
+read-aloud before preparing the microphone and disables speech during capture.
+The UI subscribes to playback booleans, so changes only update affected footer
+controls. The adapter is separate from the session for future synthesis engines.
+
+Schema v10 adds nullable elapsed_millis to messages. A monotonic clock measures
+from accepted request/save to completion, failure, or Stop, excluding the final
+storage write. Retry starts a new measurement and clears the previous duration;
+old replies and startup-interrupted requests have no invented timing. Speech
+playback and copying do not alter this model-response measurement or raw text.
+
+
+The language control beside Read aloud opens a centered, searchable modal list
+with every language/region exposed by the device's TTS engine, deduplicated by
+canonical language tag. The current selection has a checkmark; Device default
+clears the override, and outside taps, Close and Back dismiss without changes.
+Language names use the runtime's localized display names where available, with
+bundled ISO language names as fallback. Search fuzzy-matches English names,
+native names and language tags (for example Swedish, Svenska and sv-SE),
+ignoring case and accents. The picker and playback share one in-memory TanStack
+voice query; refresh discovers newly available voices.
+
+Selection passes an explicit language and matching voice identifier. Expo's
+Android adapter requires the base language code, so that option uses the base
+while the voice identifier preserves the selected region. Missing languages
+produce an error and invalidate discovery rather than silently choosing English.
+Changing language stops active/initializing playback; the next tap restarts the
+response using that language. Choices are per response for the current session,
+do not change phone settings, and are not persisted. All chunks retain the same
+captured language/voice.
+
+The speech port accepts complete spoken text and returns
+`Promise<"finished" | "stopped">` for the entire playback; actual failures reject.
+PromiseSpeech owns the native length limit, splits text and plays one chunk at
+a time. Stop settles playback without relying on onStopped, including between
+chunks. Late callbacks cannot advance an old chunk or replacement playback.
+SpeechSession handles response selection, Markdown cleanup and cancellation
+around asynchronous voice preparation, without knowing engine length limits.
