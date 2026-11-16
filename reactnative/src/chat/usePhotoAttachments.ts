@@ -3,6 +3,7 @@ import * as ImagePicker from "expo-image-picker";
 import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
 import { File } from "expo-file-system";
 import { MAX_PHOTOS, MAX_PHOTO_BYTES } from "./openRouter";
+import type { CameraCapturedPicture } from "expo-camera";
 import type { PhotoInput } from "./history";
 import type { PersistentDraft } from "./PersistentDraft";
 
@@ -17,6 +18,7 @@ function removeFile(uri: string) {
 
 export function usePhotoAttachments(visible: boolean, draft: PersistentDraft) {
   const photos = useSyncExternalStore(draft.subscribe, draft.getPhotos);
+  const [cameraOpen, setCameraOpen] = useState(false);
   const [picking, setPicking] = useState(false);
   const ownedRef = useRef(new Set<string>());
   const activeRef = useRef(false);
@@ -114,18 +116,16 @@ export function usePhotoAttachments(visible: boolean, draft: PersistentDraft) {
           );
         if (!activeRef.current) return;
       }
-      const result =
-        source === "camera"
-          ? await ImagePicker.launchCameraAsync({
-              mediaTypes: ["images"],
-              quality: 1,
-            })
-          : await ImagePicker.launchImageLibraryAsync({
-              mediaTypes: ["images"],
-              allowsMultipleSelection: true,
-              selectionLimit: MAX_PHOTOS - photos.length,
-              quality: 1,
-            });
+      if (source === "camera") {
+        setCameraOpen(true);
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        allowsMultipleSelection: true,
+        selectionLimit: MAX_PHOTOS - photos.length,
+        quality: 1,
+      });
       if (result.canceled || !activeRef.current) return;
       for (const asset of result.assets.slice(0, MAX_PHOTOS - photos.length)) {
         added.push(await normalize(asset));
@@ -143,7 +143,18 @@ export function usePhotoAttachments(visible: boolean, draft: PersistentDraft) {
       if (mountedRef.current) setPicking(false);
     }
   }
+  async function attachCamera(photo: CameraCapturedPicture) {
+    if (!activeRef.current || draft.suspended)
+      throw new Error("Return to the chat to attach your photo.");
+    const input = await normalize(photo);
+    if (!activeRef.current || draft.suspended)
+      throw new Error("Return to the chat to attach your photo.");
+    await draft.addPhotos([input]);
+  }
   return {
+    cameraOpen,
+    closeCamera: () => setCameraOpen(false),
+    attachCamera,
     photos,
     picking,
     pick,

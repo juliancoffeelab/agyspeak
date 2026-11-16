@@ -19,6 +19,7 @@ import X from "lucide-react-native/icons/x";
 
 import type { ModelSettings } from "./openRouter";
 import { useRecording } from "./useRecording";
+import { PhotoCamera } from "./PhotoCamera";
 import { AttachmentMenu } from "./AttachmentMenu";
 import { usePhotoAttachments } from "./usePhotoAttachments";
 import { contextHasAudio, contextHasPhotos } from "./context";
@@ -176,6 +177,13 @@ export function AudioComposer({
     capture.phase === "sending";
   return (
     <View style={styles.container}>
+      {images.cameraOpen && visible && (
+        <PhotoCamera
+          onClose={images.closeCamera}
+          onAttach={images.attachCamera}
+        />
+      )}
+
       <AttachmentMenu
         visible={menuOpen && visible}
         colors={colors}

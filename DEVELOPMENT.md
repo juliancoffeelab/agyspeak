@@ -386,8 +386,14 @@ ignored by Git. Development uses package `dev.agyspeak.app.dev`; release uses
 
 ## Photo attachments
 
-Camera and Photos use Expo ImagePicker's native camera and library interfaces.
-Camera permission is requested when opening capture. These flows select
+Camera uses an in-app Expo Camera preview. Capture selects the supported size
+nearest our 2048-pixel attachment limit to avoid processing full sensor-resolution
+images just for review. The captured JPEG is shown before normalization or SQLite
+writes, with Retake photo and Attach photo actions. Only Attach prepares and
+persists the image; cancelling or retaking removes the temporary capture. The
+camera stops while backgrounded. Photos uses Expo ImagePicker's native library
+interface without requesting broad library access on Android. Camera permission
+is requested when opening capture. These flows select
 images only, with up to four photos and 8 MB combined per message. Expo
 ImageManipulator normalizes selected images to JPEG (quality 0.85), preserves
 aspect ratio, and downsizes only when the long edge exceeds 2048 pixels. A
@@ -427,5 +433,12 @@ second capability check after the actual request context is read.
 
 Tapping a sent image or draft thumbnail opens the full normalized photo in a
 native modal. The viewer uses TanStack Query for one local SQLite read, retains
-no full-image query cache after closing, and displays the full image without adding it to the message-list snapshot.
-Opening the viewer does not make a model request.
+no full-image query cache after closing, and supports pinch zoom (1–6×), drag,
+and double-tap zoom/reset through React Native PanResponder and Animated.
+Gesture updates do not publish chat state or rerender the message list. Dragging
+uses stable screen coordinates with a 1.4× pan response. At fit-to-screen zoom,
+a downward drag dismisses after 150 pixels (or 18% of a smaller viewport); a
+short downward flick also dismisses. Short gestures spring back. Dismiss and
+snap-back animations use the native driver. Pinch gestures and panning while
+zoomed do not dismiss the viewer. The viewer has no instructional text. No extra
+native gesture library or model request is needed to view photos.
