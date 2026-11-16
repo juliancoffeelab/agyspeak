@@ -21,7 +21,7 @@ again.
 - **Worker:** implements a bounded task so work can proceed in parallel. Give it
   a clear scope, ownership boundaries and an expected result.
 - **Reviewer:** provides an independent view to find what the implementer missed.
-  Give it the requirements, source and [review skill](../review/SKILL.md), with
+  Give it the requirements, source and `review`, with
   fresh context rather than the implementer's reasoning or earlier conclusions.
 
 **Review goes at the end.** The implementer owns verification and validation to

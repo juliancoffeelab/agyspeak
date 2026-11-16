@@ -14,7 +14,7 @@ implementation, pushes and deployment do not invoke this skill.
 “Get it to merge gate” explicitly requests preparation: it authorizes one
 fresh-context review subagent and requests history consolidation according to
 the review's source-derived logical units. Follow
-[working-with-subagents](../working-with-subagents/SKILL.md): validate before
+`working-with-subagents`: validate before
 review, resolve substantiated findings and complete necessary history cleanup
 before auditing readiness. Reuse applicable existing review evidence; the
 authorization does not require a redundant review or indiscriminate squashing.
@@ -28,10 +28,10 @@ later changes invalidate its coverage. Check these five conditions:
 - **Independent review:** cite a reviewer other than the implementer, reviewed
   revision/scope and the resolution or evidenced disposition of findings. The
   review must cover the final substantive change and explicitly assess
-  requirements, scope and simplicity as required by [review](../review/SKILL.md).
+  requirements, scope and simplicity as required by `review`.
   Agent reviewers use fresh context; human reviews also count.
 - **Markdown hygiene:** name added, changed or deleted Markdown/guidance and cite
-  its [writing-for-agents](../writing-for-agents/SKILL.md) review. Retained material
+  its `writing-for-agents` review. Retained material
   serves a permanent purpose; temporary plans, handoffs and reports stay outside
   tracked content. Say “none” when no documents changed.
 - **Lessons preserved:** check each material implementation/review lesson against

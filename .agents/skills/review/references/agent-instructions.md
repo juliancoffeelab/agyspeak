@@ -1,6 +1,6 @@
 # Agent instruction review
 
-Use [writing-for-agents](../../writing-for-agents/SKILL.md) as the underlying
+Use `writing-for-agents` as the underlying
 guidance. Assess each reviewed skill (including its references) or standalone
 instruction document separately with these questions:
 

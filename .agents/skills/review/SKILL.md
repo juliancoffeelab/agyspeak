@@ -7,7 +7,7 @@ description: Use when your task is to review a proposed or existing change.
 
 Assess whether the change solves the intended problem and earns its place.
 Review requests produce findings; editing the implementation is separate work.
-For a merge-readiness decision, use [merge-gate](../merge-gate/SKILL.md).
+For a merge-readiness decision, use `merge-gate`.
 
 ## Establish scope
 
