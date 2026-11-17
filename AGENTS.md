@@ -47,6 +47,13 @@ When the user interrupts ongoing work, stop that work and keep it paused. Addres
 only the interruption and explicitly requested follow-up. Resume the earlier
 implementation, checks, commits or deployment only when the user asks to continue.
 
+## Tests
+
+Add permanent tests only when their expected value exceeds their total cost,
+including runtime, maintenance, brittleness, and duplication. Prefer existing
+checks or disposable probes when those sufficiently verify the change. Missing
+tests alone do not justify adding them.
+
 ## Paid API requests
 
 Before running scripts, tests, or benchmarks, check whether they make paid API
