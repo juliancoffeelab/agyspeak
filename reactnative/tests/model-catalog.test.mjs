@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { decodeCatalog, encodeCatalog } from "../src/chat/modelCatalog.ts";
+import { decodeCatalog } from "../src/providers/openrouter/catalogCache.ts";
 
 const models = [
   {
@@ -10,26 +10,24 @@ const models = [
     image: false,
     inputPrice: 0,
     outputPrice: null,
+    maxOutput: 65_536,
   },
 ];
 
-test("saved catalog preserves normalized records without reconstructing provider JSON", () => {
-  const stored = JSON.parse(JSON.stringify(encodeCatalog(models)));
-  assert.deepEqual(stored, { version: 4, models });
-  assert.deepEqual(decodeCatalog(stored), models);
+test("a saved catalog reads back as the models that were saved", () => {
+  assert.deepEqual(decodeCatalog(JSON.parse(JSON.stringify(models))), models);
 });
 
-test("unsupported or damaged catalogs are rejected for a fresh download", () => {
+test("a catalog in any other shape is rejected for a fresh download", () => {
   for (const bad of [
     null,
-    { version: 1, models },
-    { version: 2, models },
-    { version: 3, models },
-    { version: 4, models: [] },
-    { version: 4, models: [{ ...models[0], audio: "yes" }] },
-    { version: 4, models: [{ ...models[0], inputPrice: -1 }] },
-    { version: 4, models: [{ ...models[0], outputPrice: "0" }] },
-    { version: 4, models: [{ ...models[0], id: "" }] },
+    [],
+    { version: 5, models },
+    [{ ...models[0], maxOutput: undefined }],
+    [{ ...models[0], audio: "yes" }],
+    [{ ...models[0], inputPrice: -1 }],
+    [{ ...models[0], outputPrice: "0" }],
+    [{ ...models[0], id: "" }],
   ])
     assert.throws(() => decodeCatalog(bad), /Invalid saved model catalog/);
 });

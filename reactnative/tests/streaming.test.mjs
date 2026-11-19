@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { completeReply } from "../src/chat/openRouter.ts";
+import { completeReply } from "../src/providers/openrouter/transport.ts";
 
-const settings = { apiKey: "sk-or-test-never-sent", model: "test/model" };
+const settings = {
+  apiKey: "sk-or-test-never-sent",
+  model: "test/model",
+  maxTokens: 27_000,
+};
 const messages = [{ id: 1, role: "user", text: "Hello", status: "complete" }];
 function frame(data) {
   return `data: ${JSON.stringify(data)}\r\n\r\n`;
@@ -50,6 +54,7 @@ test("SSE handles byte boundaries, CRLF, comments, Unicode, reasoning, and termi
     text: "Hej å😀!",
     model: "actual/model",
     cost: 0.0002,
+    stopped: null,
   });
 });
 
@@ -125,7 +130,8 @@ test("mid-stream provider errors are actionable and redact credentials", async (
       async () => bytesResponse(sse),
     ),
     (error) => {
-      assert.match(error.message, /model provider is rate limited/);
+      assert.match(error.message, /request was rate limited/);
+      assert.match(error.message, /Upstream rate limited/);
       assert.ok(!error.message.includes(settings.apiKey));
       return true;
     },
@@ -164,4 +170,151 @@ test("aborting an in-flight body stops reading and further text callbacks", asyn
   );
   await assert.rejects(task);
   assert.deepEqual(updates, ["First"]);
+});
+
+test("a reply cut off at the output limit keeps its text and says why", async () => {
+  const sse =
+    frame(delta("Half an ans")) +
+    frame({ choices: [{ delta: {}, finish_reason: "length" }] }) +
+    "data: [DONE]\n\n";
+  const result = await completeReply(
+    messages,
+    settings,
+    new AbortController().signal,
+    () => {},
+    async () => bytesResponse(sse),
+  );
+  assert.deepEqual(result, {
+    text: "Half an ans",
+    model: "test/model",
+    cost: null,
+    stopped: "length",
+  });
+});
+
+// The body stays open until the request is aborted, as a stalled reply does.
+function stalled(options, onOpen) {
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        options.signal.addEventListener(
+          "abort",
+          () => controller.error(new DOMException("Aborted", "AbortError")),
+          { once: true },
+        );
+        onOpen(controller);
+      },
+    }),
+  );
+}
+const tick = () => new Promise((resolve) => setImmediate(resolve));
+
+test("silence ends a reply as timed out; stream events, not keep-alives, postpone it", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let stream;
+  const task = completeReply(
+    messages,
+    settings,
+    new AbortController().signal,
+    () => {},
+    async (_url, options) =>
+      stalled(options, (controller) => {
+        stream = controller;
+      }),
+  );
+  await tick();
+  const send = async (text) => {
+    stream.enqueue(new TextEncoder().encode(text));
+    await tick();
+  };
+  t.mock.timers.tick(100_000);
+  await send(frame(delta("Thinking done. ")));
+  t.mock.timers.tick(100_000);
+  await send(": OPENROUTER PROCESSING\n\n");
+  t.mock.timers.tick(19_999);
+  await tick();
+  let settled = false;
+  void task.then(() => (settled = true));
+  await tick();
+  assert.equal(settled, false);
+  t.mock.timers.tick(1);
+  assert.deepEqual(await task, {
+    text: "Thinking done. ",
+    model: "test/model",
+    cost: null,
+    stopped: "timeout",
+  });
+});
+
+test("a reply that keeps streaming still ends at the overall time limit", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let stream;
+  const task = completeReply(
+    messages,
+    settings,
+    new AbortController().signal,
+    () => {},
+    async (_url, options) =>
+      stalled(options, (controller) => {
+        stream = controller;
+      }),
+  );
+  await tick();
+  for (let elapsed = 0; elapsed < 600_000; elapsed += 60_000) {
+    stream.enqueue(new TextEncoder().encode(frame(delta("more "))));
+    await tick();
+    t.mock.timers.tick(60_000);
+  }
+  const result = await task;
+  assert.equal(result.stopped, "timeout");
+  assert.equal(result.text, "more ".repeat(10));
+});
+
+test("a request or body read the platform rejects is a lost connection, keeping the cause", async () => {
+  const refused = new Error("fetch failed: any platform wording");
+  await assert.rejects(
+    completeReply(
+      messages,
+      settings,
+      new AbortController().signal,
+      () => {},
+      async () => {
+        throw refused;
+      },
+    ),
+    (error) => {
+      assert.match(error.message, /Couldn’t reach OpenRouter/);
+      assert.equal(error.cause, refused);
+      return true;
+    },
+  );
+  const dropped = new Error("socket closed");
+  const updates = [];
+  await assert.rejects(
+    completeReply(
+      messages,
+      settings,
+      new AbortController().signal,
+      (text) => updates.push(text),
+      async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(
+                new TextEncoder().encode(frame(delta("Part"))),
+              );
+            },
+            pull(controller) {
+              controller.error(dropped);
+            },
+          }),
+        ),
+    ),
+    (error) => {
+      assert.match(error.message, /Couldn’t reach OpenRouter/);
+      assert.equal(error.cause, dropped);
+      return true;
+    },
+  );
+  assert.deepEqual(updates, ["Part"]);
 });

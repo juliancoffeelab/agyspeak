@@ -3,7 +3,7 @@ import test from "node:test";
 import {
   cameraPictureSize,
   shouldDismissPhoto,
-} from "../src/chat/photoInteraction.ts";
+} from "../src/features/chat/photoInteraction.ts";
 
 test("camera selects near-attachment resolution instead of full sensor size", () => {
   assert.equal(

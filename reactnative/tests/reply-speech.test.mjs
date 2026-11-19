@@ -1,26 +1,60 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { PromiseSpeech } from "../src/chat/PromiseSpeech.ts";
-import { SpeechSession } from "../src/chat/SpeechSession.ts";
-import { markdownToSpeechText, speechChunks } from "../src/chat/speechText.ts";
+import { PromiseSpeech } from "../src/device/speech/PromiseSpeech.ts";
+import { SpeechSession } from "../src/device/speech/SpeechSession.ts";
+import { createAudioArbiter } from "../src/device/audio.ts";
+import { speechChunks } from "../src/device/speech/text.ts";
+import { markdownToSpeechText } from "../src/features/chat/runtime/speechText.ts";
+import { createResponseSpeech } from "../src/features/chat/runtime/responseSpeech.ts";
+
+// Chat's response policy over device playback, as the app composes them.
+function readAloud(device, onError, defaultLanguage) {
+  const responses = createResponseSpeech({
+    speech: device,
+    defaultLanguage,
+    onError,
+  });
+  return {
+    toggle: responses.toggle,
+    setLanguage: responses.setLanguage,
+    stop: () => device.stop(),
+    getSnapshot: () => ({
+      messageId: device.getSnapshot().playing,
+      recording: device.getSnapshot().recording,
+      languages: responses.languages.getState(),
+    }),
+  };
+}
 
 function setup(stop = async () => {}, options = {}) {
   const spoken = [],
     errors = [];
-  const { maxLength = 30, ...sessionOptions } = options;
+  const {
+    maxLength = 30,
+    defaultLanguage = () => null,
+    ...sessionOptions
+  } = options;
   const playback = new PromiseSpeech({
     maxLength,
     stop,
     speak: (text, selection, callbacks) =>
       spoken.push({ text, selection, callbacks, ...callbacks }),
   });
-  const speech = new SpeechSession({
-    ...sessionOptions,
-    stop: playback.stop,
-    speak: playback.speak,
-    onError: (message) => errors.push(message),
-  });
-  return { speech, spoken, errors, playback };
+  const audio = createAudioArbiter();
+  const onError = (message) => errors.push(message);
+  const speech = readAloud(
+    new SpeechSession({
+      prepare: async () => null,
+      ...sessionOptions,
+      audio,
+      stop: playback.stop,
+      speak: playback.speak,
+      onError,
+    }),
+    onError,
+    defaultLanguage,
+  );
+  return { speech, spoken, errors, playback, audio };
 }
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 async function start(speech, ...args) {
@@ -110,17 +144,24 @@ test("long speech advances one chunk at a time and cannot resume after Stop", as
 });
 
 test("voice failures clear playback; recording blocks speech until released", async () => {
-  const { speech, spoken, errors } = setup();
+  const { speech, spoken, errors, audio } = setup();
   await start(speech, 1, "hello");
   spoken[0].onError();
   spoken[0].onError();
   await tick();
   assert.equal(speech.getSnapshot().messageId, null);
   assert.equal(errors.length, 1);
-  speech.setRecording(true);
+  const stale = audio.claim();
+  const current = audio.claim();
+  audio.release(stale);
+  assert.equal(
+    speech.getSnapshot().recording,
+    true,
+    "a stale release is ignored",
+  );
   await start(speech, 2, "blocked");
   assert.equal(spoken.length, 1);
-  speech.setRecording(false);
+  audio.release(current);
   await start(speech, 2, "allowed");
   assert.equal(spoken.length, 2);
   await start(speech, 2, "allowed");
@@ -142,12 +183,17 @@ test("stopping during cold voice initialization cannot enqueue an utterance late
     ready = resolve;
   });
   const spoken = [];
-  const speech = new SpeechSession({
-    prepare: () => preparation,
-    stop: async () => {},
-    speak: (text) => spoken.push(text),
-    onError: () => {},
-  });
+  const speech = readAloud(
+    new SpeechSession({
+      audio: createAudioArbiter(),
+      prepare: () => preparation,
+      stop: async () => {},
+      speak: (text) => spoken.push(text),
+      onError: () => {},
+    }),
+    () => {},
+    () => null,
+  );
   const start = speech.toggle(1, "Do not speak after Stop");
   await tick();
   await speech.stop();
@@ -184,18 +230,48 @@ test("language choice stays with its response and reaches every speech chunk", a
   assert.equal(speech.getSnapshot().languages.get(1), "sv");
 });
 
+test("the saved default applies where a response has no choice of its own, read when reading starts", async () => {
+  const prepared = [];
+  let saved = "uk";
+  const { speech, spoken } = setup(undefined, {
+    defaultLanguage: () => saved,
+    prepare: async (language) => {
+      prepared.push(language);
+      return language === null
+        ? null
+        : { language, voice: `${language}-voice` };
+    },
+  });
+  speech.setLanguage(2, "sv");
+  await start(speech, 1, "Привіт");
+  spoken.at(-1).callbacks.onDone();
+  await tick();
+  await start(speech, 2, "Hej");
+  spoken.at(-1).callbacks.onDone();
+  await tick();
+  saved = null;
+  await start(speech, 1, "Hello");
+  assert.deepEqual(prepared, ["uk", "sv", null]);
+  assert.equal(speech.getSnapshot().languages.has(1), false);
+});
+
 test("changing language cancels pending initialization and never starts the old language", async () => {
   let ready;
   const preparation = new Promise((resolve) => {
     ready = resolve;
   });
   const spoken = [];
-  const speech = new SpeechSession({
-    stop: async () => {},
-    prepare: () => preparation,
-    speak: (text, callbacks, selection) => spoken.push(selection),
-    onError: () => {},
-  });
+  const speech = readAloud(
+    new SpeechSession({
+      audio: createAudioArbiter(),
+      stop: async () => {},
+      prepare: () => preparation,
+      speak: (text, callbacks, selection) => spoken.push(selection),
+      onError: () => {},
+    }),
+    () => {},
+    () => null,
+  );
   speech.setLanguage(1, "en");
   const start = speech.toggle(1, "Hello");
   await tick();
@@ -208,7 +284,7 @@ test("changing language cancels pending initialization and never starts the old 
 });
 
 test("voice matching uses the requested language and never silently picks English for Swedish", async () => {
-  const { voiceForLanguage } = await import("../src/chat/speechLanguage.ts");
+  const { voiceForLanguage } = await import("../src/device/speech/language.ts");
   const voices = [
     { language: "en-US", identifier: "english" },
     { language: "sv-SE", identifier: "swedish" },
@@ -221,7 +297,7 @@ test("voice matching uses the requested language and never silently picks Englis
 
 test("language picker discovers and deduplicates every engine language, including regional variants", async () => {
   const { availableSpeechLanguages, voiceForLanguage } =
-    await import("../src/chat/speechLanguage.ts");
+    await import("../src/device/speech/language.ts");
   const voices = [
     { language: "en-US", identifier: "english-us" },
     { language: "en_US", identifier: "second-us-voice" },
@@ -248,14 +324,14 @@ test("Device default clears only the selected response's explicit language", asy
   const { speech } = setup();
   speech.setLanguage(1, "sv-SE");
   speech.setLanguage(2, "fr-FR");
-  speech.setLanguage(1, undefined);
+  speech.setLanguage(1, null);
   assert.equal(speech.getSnapshot().languages.has(1), false);
   assert.equal(speech.getSnapshot().languages.get(2), "fr-FR");
 });
 
 test("language search matches English, native names, tags and small typos", async () => {
   const { availableSpeechLanguages, createSpeechLanguageSearch } =
-    await import("../src/chat/speechLanguage.ts");
+    await import("../src/device/speech/language.ts");
   const options = availableSpeechLanguages([
     { language: "sv-SE" },
     { language: "uk-UA" },
@@ -285,7 +361,7 @@ test("language search matches English, native names, tags and small typos", asyn
 
 test("language names stay searchable when native Intl.DisplayNames is unavailable", async () => {
   const { availableSpeechLanguages, createSpeechLanguageSearch } =
-    await import("../src/chat/speechLanguage.ts");
+    await import("../src/device/speech/language.ts");
   const original = Object.getOwnPropertyDescriptor(Intl, "DisplayNames");
   Object.defineProperty(Intl, "DisplayNames", {
     configurable: true,
@@ -311,16 +387,22 @@ test("language names stay searchable when native Intl.DisplayNames is unavailabl
 test("session sends complete cleaned prose through one engine call", async () => {
   const calls = [];
   let finish;
-  const speech = new SpeechSession({
-    stop: async () => {},
-    speak: (text, selection) => {
-      calls.push({ text, selection });
-      return new Promise((resolve) => {
-        finish = resolve;
-      });
-    },
-    onError: () => assert.fail("Unexpected speech error"),
-  });
+  const speech = readAloud(
+    new SpeechSession({
+      audio: createAudioArbiter(),
+      stop: async () => {},
+      prepare: async (language) => ({ language, voice: "swedish" }),
+      speak: (text, selection) => {
+        calls.push({ text, selection });
+        return new Promise((resolve) => {
+          finish = resolve;
+        });
+      },
+      onError: () => assert.fail("Unexpected speech error"),
+    }),
+    () => {},
+    () => null,
+  );
   speech.setLanguage(1, "sv-SE");
   const text = "# Heading\n\n" + "A **long** response. ".repeat(300);
   const playing = speech.toggle(1, text);
@@ -328,7 +410,10 @@ test("session sends complete cleaned prose through one engine call", async () =>
   assert.equal(calls.length, 1);
   assert.equal(calls[0].text, markdownToSpeechText(text));
   assert.ok(calls[0].text.length > 3000);
-  assert.deepEqual(calls[0].selection, { language: "sv-SE" });
+  assert.deepEqual(calls[0].selection, {
+    language: "sv-SE",
+    voice: "swedish",
+  });
   assert.equal(speech.getSnapshot().messageId, 1);
   finish("finished");
   await playing;

@@ -1,11 +1,16 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { completeReply, requestMessages } from "../src/chat/openRouter.ts";
-import { parseKeyInput, decodeSettings } from "../src/chat/settings.ts";
+import {
+  completeReply,
+  requestMessages,
+} from "../src/providers/openrouter/transport.ts";
+import { toProviderContext } from "../src/features/chat/runtime/context.ts";
+import { parseKeyInput } from "../src/providers/openrouter/key.ts";
 
 const settings = {
   apiKey: "sk-or-v1-dummy-never-sent",
   model: "openrouter/free",
+  maxTokens: 27_000,
 };
 const user = { id: 1, role: "user", text: "Hello", status: "complete" };
 const signal = () => new AbortController().signal;
@@ -21,7 +26,7 @@ test("request is bounded, authenticated, and parsed without a live API call", as
       assert.equal(options.headers.Authorization, `Bearer ${settings.apiKey}`);
       const body = JSON.parse(options.body);
       assert.equal(body.model, "openrouter/free");
-      assert.equal(body.max_tokens, 512);
+      assert.equal(body.max_tokens, 27_000);
       assert.equal(body.stream, true);
       assert.deepEqual(body.messages, [{ role: "user", content: "Hello" }]);
       return streamResponse("Hi!", "chosen/free-model", 0);
@@ -31,6 +36,7 @@ test("request is bounded, authenticated, and parsed without a live API call", as
     text: "Hi!",
     model: "chosen/free-model",
     cost: 0,
+    stopped: null,
   });
 });
 
@@ -70,7 +76,7 @@ test("context excludes unfinished replies and is limited to recent text", () => 
     { ...user, role: "assistant", text: "Failure", status: "failed" },
     { ...user, role: "assistant", text: "", status: "pending" },
   ];
-  assert.deepEqual(requestMessages(history), [
+  assert.deepEqual(requestMessages(toProviderContext(history)), [
     { role: "user", content: "Hello" },
   ]);
 });
@@ -107,8 +113,6 @@ test("QR and clipboard key formats are validated without executing links or acce
   );
   assert.throws(() => parseKeyInput("https://example.com"));
   assert.throws(() => parseKeyInput('{"type":"unrelated","key":"secret"}'));
-  assert.equal(decodeSettings(null).model, "openrouter/free");
-  assert.throws(() => decodeSettings('{"apiKey":123}'));
 });
 
 test("provider errors retain actionable details and redact credentials", async () => {
@@ -144,7 +148,7 @@ test("provider errors retain actionable details and redact credentials", async (
   );
 });
 
-test("429 errors distinguish upstream provider limits from unspecified rate limits", async () => {
+test("a 429 is reported as rate limited, with the provider's own detail and no guess at whose limit", async () => {
   await assert.rejects(
     completeReply(
       [user],
@@ -166,7 +170,7 @@ test("429 errors distinguish upstream provider limits from unspecified rate limi
           { status: 429 },
         ),
     ),
-    /model provider is rate limited/,
+    /^Error: The request was rate limited\. Try again later\. Provider returned error temporarily rate-limited upstream$/,
   );
   await assert.rejects(
     completeReply(
@@ -176,7 +180,7 @@ test("429 errors distinguish upstream provider limits from unspecified rate limi
       () => {},
       async () => new Response("", { status: 429 }),
     ),
-    /request was rate limited/,
+    /^Error: The request was rate limited\. Try again later\.$/,
   );
 });
 
@@ -256,7 +260,7 @@ test("text follow-ups preserve earlier audio context and honor the selected mode
 test("retained audio context is bounded independently of text", () => {
   const large = { data: "A".repeat(8 * 1024 * 1024), format: "wav" };
   const history = [1, 2, 3].map((id) => ({ ...user, id, audio: large }));
-  assert.equal(requestMessages(history).length, 2);
+  assert.equal(requestMessages(toProviderContext(history)).length, 2);
 });
 
 test("incompatible selected models surface a provider error without a model switch or retry", async () => {

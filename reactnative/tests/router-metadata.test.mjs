@@ -5,8 +5,9 @@ import {
   modelPrice,
   parseModels,
   parseUsage,
+  replyTokenLimit,
   routerGet,
-} from "../src/chat/routerMetadata.ts";
+} from "../src/providers/openrouter/metadata.ts";
 
 test("catalog keeps text-output models and their audio capabilities", () => {
   const models = parseModels({
@@ -42,8 +43,11 @@ test("catalog keeps text-output models and their audio capabilities", () => {
       ["google/flash", true],
     ],
   );
-  assert.equal(matchModels(models, "GOOGLE flash")[0].name, "Gemini Flash");
-  assert.deepEqual(matchModels(models, "missing"), []);
+  assert.equal(
+    matchModels(models, "GOOGLE flash", null)[0].name,
+    "Gemini Flash",
+  );
+  assert.deepEqual(matchModels(models, "missing", null), []);
   assert.throws(() => parseModels({ data: [] }));
 });
 
@@ -72,7 +76,7 @@ test("catalog GET is public; usage GET uses bearer auth without sending prompts"
     return { ok: true, json: async () => ({ data: [] }) };
   };
   const signal = new AbortController().signal;
-  await routerGet("models", signal, undefined, fetcher);
+  await routerGet("models", signal, null, fetcher);
   await routerGet("key", signal, "fake-key", fetcher);
   assert.equal(calls[0][0], "https://openrouter.ai/api/v1/models");
   assert.deepEqual(calls[0][1].headers, {});
@@ -166,4 +170,27 @@ test("catalog requires explicit Chat Completions compatibility, independent of t
     parsed.map((item) => item.id),
     ["vendor/chat"],
   );
+});
+
+test("a reply is asked for our limit, or the model's own when that is smaller", () => {
+  const entry = (id, top_provider) => ({
+    id,
+    name: id,
+    endpoints: ["/api/v1/chat/completions"],
+    top_provider,
+  });
+  const models = parseModels({
+    data: [
+      entry("big", { max_completion_tokens: 65_536 }),
+      entry("small", { max_completion_tokens: 4_096 }),
+      entry("unstated", { max_completion_tokens: null }),
+      entry("absent", undefined),
+    ],
+  });
+  assert.equal(replyTokenLimit("big", models), 27_000);
+  assert.equal(replyTokenLimit("small", models), 4_096);
+  assert.equal(replyTokenLimit("unstated", models), 27_000);
+  assert.equal(replyTokenLimit("absent", models), 27_000);
+  assert.equal(replyTokenLimit("custom/unlisted", models), 27_000);
+  assert.equal(replyTokenLimit("big", undefined), 27_000);
 });

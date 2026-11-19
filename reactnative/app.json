@@ -42,7 +42,8 @@
           "microphonePermission": "Record voice messages."
         }
       ],
-      "./plugins/withReleaseSigning"
+      "./plugins/withReleaseSigning",
+      "expo-router"
     ]
   }
 }

@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { connect, appendTurn } from "./sqlite-helper.mjs";
-import { ChatController } from "../src/chat/ChatController.ts";
+import {
+  connect,
+  coordinator,
+  latestId,
+  readLatest,
+} from "./sqlite-helper.mjs";
 
 const settings = { apiKey: "test-key", model: "test/model" };
 const tick = () => new Promise((resolve) => setImmediate(resolve));
@@ -19,66 +23,48 @@ test("elapsed response time is saved for completion, Stop and retry without usin
   await store.initialize();
   let now = 1000,
     attempt = deferred();
-  const controller = new ChatController(
+  const controller = await coordinator({
     store,
-    await store.read(),
-    (_messages, _settings, _signal, onText) => {
+    openAt: await latestId(store),
+    reply: (_messages, _settings, _signal, onText) => {
       onText("partial");
       return attempt.promise;
     },
-    () => "chat",
-    "",
-    () => null,
-    () => null,
-    [],
-    () => now,
-  );
+    now: () => now,
+    settings: () => settings,
+  });
   try {
-    await controller.send("Hello", settings);
+    await controller.send("Hello", []);
     await tick();
     now = 2250;
-    attempt.resolve({ text: "Complete", model: "test/model", cost: 0 });
+    attempt.resolve({
+      text: "Complete",
+      model: "test/model",
+      cost: 0,
+      stopped: null,
+    });
     await tick();
-    assert.equal((await store.read()).messages.at(-1).elapsedMillis, 1250);
+    assert.equal((await readLatest(store)).messages.at(-1).elapsedMillis, 1250);
     now = 3000;
     attempt = deferred();
-    await controller.send("Again", settings);
+    await controller.send("Again", []);
     await tick();
     now = 3400;
     await controller.stop();
-    const id = controller.getSnapshot().history.messages.at(-1).id;
-    assert.equal((await store.read()).messages.at(-1).elapsedMillis, 400);
+    const id = controller.state.getState().history.messages.at(-1).id;
+    assert.equal((await readLatest(store)).messages.at(-1).elapsedMillis, 400);
     now = 5000;
     attempt = deferred();
-    await controller.retryReply(id, settings);
+    await controller.retryReply(id);
     await tick();
-    assert.equal((await store.read()).messages.at(-1).elapsedMillis, null);
+    assert.equal((await readLatest(store)).messages.at(-1).elapsedMillis, null);
     now = 5650;
     attempt.reject(new Error("offline"));
     await tick();
-    assert.equal((await store.read()).messages.at(-1).elapsedMillis, 650);
-    assert.equal((await store.read()).messages.at(-1).status, "failed");
+    assert.equal((await readLatest(store)).messages.at(-1).elapsedMillis, 650);
+    assert.equal((await readLatest(store)).messages.at(-1).status, "failed");
   } finally {
     await controller.dispose();
-    sqlite.close();
-  }
-});
-
-test("v9 migration preserves history/model selections and leaves unknown old durations empty", async () => {
-  const { store, sqlite } = connect();
-  try {
-    await store.initialize();
-    await appendTurn(store, "old", "Keep me", "Old reply", 1);
-    sqlite.exec(
-      "ALTER TABLE messages DROP COLUMN elapsed_millis; PRAGMA user_version = 9",
-    );
-    await store.initialize();
-    const history = await store.read();
-    assert.equal(history.selectedModel, "test/model");
-    assert.equal(history.messages.at(-1).text, "Old reply");
-    assert.equal(history.messages.at(-1).elapsedMillis, null);
-    assert.equal(sqlite.prepare("PRAGMA user_version").get().user_version, 10);
-  } finally {
     sqlite.close();
   }
 });

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { PromiseSpeech } from "../src/chat/PromiseSpeech.ts";
+import { PromiseSpeech } from "../src/device/speech/PromiseSpeech.ts";
 
 function setup(stop = async () => {}, maxLength = 3000) {
   const jobs = [];
@@ -22,7 +22,7 @@ test("native completion and interruption produce distinct speech outcomes", asyn
   assert.deepEqual(jobs[0].selection, { language: "sv", voice: "swedish" });
   jobs[0].onDone();
   assert.equal(await finished, "finished");
-  const stopped = playback.speak("Again");
+  const stopped = playback.speak("Again", null);
   jobs[1].onStopped();
   assert.equal(await stopped, "stopped");
 });
@@ -35,7 +35,7 @@ test("Stop settles speech even when native Stop never calls back or finishes", a
         finishStop = resolve;
       }),
   );
-  const utterance = playback.speak("Hello");
+  const utterance = playback.speak("Hello", null);
   const stopping = playback.stop();
   assert.equal(await utterance, "stopped");
   jobs[0].onDone();
@@ -46,9 +46,9 @@ test("Stop settles speech even when native Stop never calls back or finishes", a
 
 test("late callbacks cannot settle a replacement utterance", async () => {
   const { playback, jobs } = setup();
-  const first = playback.speak("First");
+  const first = playback.speak("First", null);
   await playback.stop();
-  const second = playback.speak("Second");
+  const second = playback.speak("Second", null);
   let settled = false;
   void second.then(() => {
     settled = true;
@@ -67,11 +67,11 @@ test("native speech failures reject, while failed Stop still settles the utteran
   const { playback, jobs } = setup(async () => {
     throw new Error("Stop failed");
   });
-  const failure = playback.speak("Broken");
+  const failure = playback.speak("Broken", null);
   const rejected = assert.rejects(failure, /Speech failed/);
   jobs[0].onError();
   await rejected;
-  const stopped = playback.speak("Stop me");
+  const stopped = playback.speak("Stop me", null);
   await assert.rejects(playback.stop(), /Stop failed/);
   assert.equal(await stopped, "stopped");
   const throwing = new PromiseSpeech({
@@ -81,7 +81,7 @@ test("native speech failures reject, while failed Stop still settles the utteran
       throw new Error("Native failure");
     },
   });
-  await assert.rejects(throwing.speak("Hello"), /Native failure/);
+  await assert.rejects(throwing.speak("Hello", null), /Native failure/);
 });
 
 test("one speak promise covers every chunk with the same voice and native limit", async () => {
@@ -115,7 +115,7 @@ test("one speak promise covers every chunk with the same voice and native limit"
 
 test("Stop between chunks prevents enqueueing the next chunk", async () => {
   const { playback, jobs } = setup(undefined, 12);
-  const result = playback.speak("First sentence. Second sentence.");
+  const result = playback.speak("First sentence. Second sentence.", null);
   jobs[0].onDone();
   const stopping = playback.stop();
   assert.equal(await result, "stopped");
@@ -128,6 +128,7 @@ test("native interruption or failure partway through text never advances again",
     const { playback, jobs } = setup(undefined, 12);
     const result = playback.speak(
       "First sentence. Second sentence. Third sentence.",
+      null,
     );
     const rejected = failure
       ? assert.rejects(result, /Speech failed/)

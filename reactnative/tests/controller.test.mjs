@@ -1,9 +1,24 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ChatController } from "../src/chat/ChatController.ts";
-import { connect } from "./sqlite-helper.mjs";
+import {
+  connect,
+  coordinator,
+  latestId,
+  readLatest,
+} from "./sqlite-helper.mjs";
 
-const settings = { apiKey: "sk-or-v1-dummy-never-sent", model: "test/model" };
+let settings = { apiKey: "sk-or-v1-dummy-never-sent", model: "test/model" };
+// Runs one call with changed settings; they are read as the call starts.
+function withSettings(change, call) {
+  const before = settings;
+  settings = { ...settings, ...change };
+  try {
+    return call();
+  } finally {
+    settings = before;
+  }
+}
+
 function deferred() {
   let resolve, reject;
   const promise = new Promise((yes, no) => {
@@ -13,10 +28,10 @@ function deferred() {
   return { promise, resolve, reject };
 }
 function waitFor(controller, predicate) {
-  if (predicate(controller.getSnapshot())) return Promise.resolve();
+  if (predicate(controller.state.getState())) return Promise.resolve();
   return new Promise((resolve) => {
-    const unsubscribe = controller.subscribe(() => {
-      if (predicate(controller.getSnapshot())) {
+    const unsubscribe = controller.state.subscribe((state) => {
+      if (predicate(state)) {
         unsubscribe();
         resolve();
       }
@@ -24,19 +39,15 @@ function waitFor(controller, predicate) {
   });
 }
 async function setup(reply) {
-  const { store, sqlite } = connect();
+  const { store, sqlite, failRead } = connect();
   await store.initialize();
-  let next = 0;
-  const controller = new ChatController(
+  const controller = await coordinator({
     store,
-    await store.read(),
+    openAt: await latestId(store),
     reply,
-    () => `chat-${++next}`,
-    await store.readDraft(null),
-    () => null,
-    () => null,
-  );
-  return { store, sqlite, controller };
+    settings: () => settings,
+  });
+  return { store, sqlite, controller, failRead };
 }
 
 test("send saves the user message before inference; failure and retry reuse the same rows", async () => {
@@ -47,20 +58,28 @@ test("send saves the user message before inference; failure and retry reuse the 
     ++calls === 1 ? first.promise : second.promise,
   );
   try {
-    assert.equal(await controller.send("Hello", settings), true);
-    let saved = await store.read();
+    assert.equal(await controller.send("Hello", []), true);
+    let saved = await readLatest(store);
     assert.equal(saved.messages.length, 2);
     assert.equal(saved.messages[0].text, "Hello");
     assert.equal(saved.messages[1].status, "pending");
     const ids = saved.messages.map((m) => m.id);
     first.reject(new Error("Offline"));
-    await waitFor(controller, (s) => !s.pending);
-    assert.equal(controller.getSnapshot().history.messages[1].status, "failed");
+    await waitFor(controller, (s) => !s.pending.length);
+    assert.equal(
+      controller.state.getState().history.messages[1].status,
+      "failed",
+    );
     assert.equal(calls, 1, "there is no automatic retry");
-    await controller.retryReply(ids[1], settings);
-    second.resolve({ text: "Hi!", model: "actual/model", cost: 0 });
-    await waitFor(controller, (s) => !s.pending);
-    saved = await store.read();
+    await controller.retryReply(ids[1]);
+    second.resolve({
+      text: "Hi!",
+      model: "actual/model",
+      cost: 0,
+      stopped: null,
+    });
+    await waitFor(controller, (s) => !s.pending.length);
+    saved = await readLatest(store);
     assert.deepEqual(
       saved.messages.map((m) => m.id),
       ids,
@@ -84,16 +103,24 @@ test("stop aborts; late completion cannot overwrite stopped status; navigation s
     },
   );
   try {
-    await controller.send("Wait", settings);
-    const chatId = controller.getSnapshot().history.activeId;
+    await controller.send("Wait", []);
+    const chatId = controller.state.getState().history.activeId;
     assert.equal(await controller.select(null), true);
-    assert.equal(controller.getSnapshot().history.activeId, null);
+    assert.notEqual(controller.state.getState().history.activeId, chatId);
+    // Stop reaches only the open chat's reply.
+    await controller.stop();
+    assert.equal(signal.aborted, false);
+    await controller.select(chatId);
     await controller.stop();
     assert.equal(signal.aborted, true);
-    request.resolve({ text: "Too late", model: "test", cost: 0 });
+    request.resolve({
+      text: "Too late",
+      model: "test",
+      cost: 0,
+      stopped: null,
+    });
     await Promise.resolve();
-    await controller.select(chatId);
-    const saved = await store.read();
+    const saved = await readLatest(store);
     assert.equal(saved.messages.at(-1).status, "cancelled");
     assert.equal(saved.messages.at(-1).text, "");
   } finally {
@@ -106,16 +133,26 @@ test("deleting a generating chat cannot resurrect it when the response arrives",
   const request = deferred();
   const { controller, store, sqlite } = await setup(() => request.promise);
   try {
-    await controller.send("Wait", settings);
-    await controller.remove(controller.getSnapshot().history.activeId);
-    request.resolve({ text: "Too late", model: "test", cost: 0 });
+    await controller.send("Wait", []);
+    const chatId = controller.state.getState().history.activeId;
+    await controller.remove(chatId);
+    request.resolve({
+      text: "Too late",
+      model: "test",
+      cost: 0,
+      stopped: null,
+    });
     await Promise.resolve();
-    assert.deepEqual(await store.read(), {
+    assert.deepEqual(await readLatest(store), {
       chats: [],
-      activeId: null,
+      activeId: controller.state.getState().history.activeId,
       selectedModel: null,
       messages: [],
     });
+    assert.equal(
+      sqlite.prepare("SELECT COUNT(*) AS count FROM messages").get().count,
+      0,
+    );
   } finally {
     await controller.dispose();
     sqlite.close();
@@ -126,18 +163,18 @@ test("blocked or failed save never starts inference", async () => {
   let calls = 0;
   const { controller, store, sqlite } = await setup(async () => {
     calls++;
-    return { text: "No", model: "test", cost: 0 };
+    return { text: "No", model: "test", cost: 0, stopped: null };
   });
   try {
     assert.equal(
-      await controller.send("Hello", { ...settings, apiKey: "" }),
+      await withSettings({ apiKey: null }, () => controller.send("Hello", [])),
       false,
     );
     sqlite.exec(`CREATE TRIGGER fail_pending BEFORE INSERT ON messages WHEN NEW.role='assistant'
       BEGIN SELECT RAISE(ABORT,'simulated disk failure'); END;`);
-    assert.equal(await controller.send("Hello", settings), false);
+    assert.equal(await controller.send("Hello", []), false);
     assert.equal(calls, 0);
-    assert.equal((await store.read()).chats.length, 0);
+    assert.equal((await readLatest(store)).chats.length, 0);
   } finally {
     await controller.dispose();
     sqlite.close();
@@ -148,14 +185,17 @@ test("completion in another chat updates its history without changing current se
   const request = deferred();
   const { controller, store, sqlite } = await setup(() => request.promise);
   try {
-    await controller.send("Wait", settings);
-    const chatId = controller.getSnapshot().history.activeId;
+    await controller.send("Wait", []);
+    const chatId = controller.state.getState().history.activeId;
     await controller.select(null);
-    request.resolve({ text: "Done", model: "test", cost: 0 });
-    await waitFor(controller, (s) => !s.pending);
-    assert.equal(controller.getSnapshot().history.activeId, null);
+    const fresh = controller.state.getState().history.activeId;
+    assert.notEqual(fresh, chatId);
+    request.resolve({ text: "Done", model: "test", cost: 0, stopped: null });
+    await waitFor(controller, (s) => !s.pending.length);
+    assert.equal(controller.state.getState().history.activeId, fresh);
+    assert.deepEqual(controller.state.getState().history.messages, []);
     await controller.select(chatId);
-    assert.equal((await store.read()).messages.at(-1).text, "Done");
+    assert.equal((await readLatest(store)).messages.at(-1).text, "Done");
   } finally {
     await controller.dispose();
     sqlite.close();
@@ -167,7 +207,7 @@ test("disposing during the initial save cannot start a late model request", asyn
   let calls = 0;
   const { controller, store, sqlite } = await setup(async () => {
     calls++;
-    return { text: "Late", model: "test", cost: 0 };
+    return { text: "Late", model: "test", cost: 0, stopped: null };
   });
   const original = store.beginReply.bind(store);
   const entered = deferred();
@@ -178,7 +218,7 @@ test("disposing during the initial save cannot start a late model request", asyn
     return saved;
   };
   try {
-    const sending = controller.send("Save first", settings);
+    const sending = controller.send("Save first", []);
     await entered.promise;
     const disposing = controller.dispose();
     gate.resolve();
@@ -186,7 +226,7 @@ test("disposing during the initial save cannot start a late model request", asyn
     await disposing;
     assert.equal(calls, 0);
     await store.initialize();
-    assert.equal((await store.read()).messages.at(-1).status, "failed");
+    assert.equal((await readLatest(store)).messages.at(-1).status, "failed");
   } finally {
     sqlite.close();
   }
@@ -209,14 +249,14 @@ test("voice audio and its level display survive failure, retry, and successful c
         format: audio.format,
       });
       if (calls === 1) throw new Error("Offline");
-      return { text: "Hej!", model: selected.model, cost: 0 };
+      return { text: "Hej!", model: selected.model, cost: 0, stopped: null };
     },
   );
   try {
-    assert.equal(await controller.sendAudio(audio, settings), true);
-    await waitFor(controller, (s) => !s.pending);
+    assert.equal(await controller.sendAudio(audio), true);
+    await waitFor(controller, (s) => !s.pending.length);
     await store.initialize();
-    let saved = await store.read();
+    let saved = await readLatest(store);
     assert.deepEqual(saved.messages[0].audio, {
       id: saved.messages[0].id,
       encodedLength: audio.data.length,
@@ -225,9 +265,9 @@ test("voice audio and its level display survive failure, retry, and successful c
       levels: audio.levels,
     });
     const ids = saved.messages.map((m) => m.id);
-    await controller.retryReply(ids[1], settings);
-    await waitFor(controller, (s) => !s.pending);
-    saved = await store.read();
+    await controller.retryReply(ids[1]);
+    await waitFor(controller, (s) => !s.pending.length);
+    saved = await readLatest(store);
     assert.deepEqual(
       saved.messages.map((m) => m.id),
       ids,
@@ -252,7 +292,7 @@ test("stopping while lazy audio is loading cannot start a late model request", a
   let calls = 0;
   const { controller, store, sqlite } = await setup(async () => {
     calls++;
-    return { text: "No", model: "test/model", cost: 0 };
+    return { text: "No", model: "test/model", cost: 0, stopped: null };
   });
   const entered = deferred(),
     gate = deferred();
@@ -263,13 +303,13 @@ test("stopping while lazy audio is loading cannot start a late model request", a
     return read(id);
   };
   try {
-    await controller.send("Wait for context", settings);
+    await controller.send("Wait for context", []);
     await entered.promise;
     const stopping = controller.stop();
     gate.resolve();
     await stopping;
     assert.equal(calls, 0);
-    assert.equal((await store.read()).messages.at(-1).status, "cancelled");
+    assert.equal((await readLatest(store)).messages.at(-1).status, "cancelled");
   } finally {
     await controller.dispose();
     sqlite.close();
@@ -288,10 +328,10 @@ test("stream updates only the reply store; Stop persists partial text and ignore
     },
   );
   try {
-    await controller.send("Stream", settings);
+    await controller.send("Stream", []);
     await started.promise;
-    const snapshot = controller.getSnapshot();
-    const stream = snapshot.pending.stream;
+    const snapshot = controller.state.getState();
+    const stream = snapshot.pending[0].stream;
     let notifications = 0;
     const unsubscribe = stream.subscribe(() => {
       notifications++;
@@ -300,12 +340,12 @@ test("stream updates only the reply store; Stop persists partial text and ignore
     update("First second");
     update("First second third");
     assert.equal(
-      controller.getSnapshot(),
+      controller.state.getState(),
       snapshot,
       "chunks never publish the whole chat state",
     );
     assert.equal(
-      (await store.read()).messages.at(-1).text,
+      (await readLatest(store)).messages.at(-1).text,
       "",
       "chunks never write SQLite",
     );
@@ -313,13 +353,18 @@ test("stream updates only the reply store; Stop persists partial text and ignore
     assert.equal(stream.getSnapshot(), "First second third");
     assert.equal(notifications, 1, "rapid chunks are coalesced");
     await controller.stop();
-    const saved = (await store.read()).messages.at(-1);
+    const saved = (await readLatest(store)).messages.at(-1);
     assert.equal(saved.status, "cancelled");
     assert.equal(saved.text, "First second third");
     update("Late chunk");
-    request.resolve({ text: "Late completion", model: "test", cost: 0 });
+    request.resolve({
+      text: "Late completion",
+      model: "test",
+      cost: 0,
+      stopped: null,
+    });
     await new Promise((resolve) => setImmediate(resolve));
-    assert.equal((await store.read()).messages.at(-1).text, saved.text);
+    assert.equal((await readLatest(store)).messages.at(-1).text, saved.text);
     assert.equal(stream.getSnapshot(), saved.text);
     unsubscribe();
   } finally {
@@ -342,27 +387,155 @@ test("failed streams retain partial text and retry starts with an empty reply st
     },
   );
   try {
-    await controller.send("Stream", settings);
+    await controller.send("Stream", []);
     await started[0].promise;
     updates[0]("Partial reply");
     requests[0].reject(new Error("Stream disconnected"));
-    await waitFor(controller, (state) => !state.pending);
-    const failed = (await store.read()).messages.at(-1);
+    await waitFor(controller, (state) => !state.pending.length);
+    const failed = (await readLatest(store)).messages.at(-1);
     assert.equal(failed.status, "failed");
     assert.equal(failed.text, "Partial reply");
-    await controller.retryReply(failed.id, settings);
+    await controller.retryReply(failed.id);
     await started[1].promise;
-    const stream = controller.getSnapshot().pending.stream;
+    const stream = controller.state.getState().pending[0].stream;
     assert.equal(stream.getSnapshot(), "");
     updates[0]("Stale retry text");
     assert.equal(stream.latest, "");
     updates[1]("Complete reply");
-    requests[1].resolve({ text: "Complete reply", model: "actual", cost: 0 });
-    await waitFor(controller, (state) => !state.pending);
-    const final = (await store.read()).messages.at(-1);
+    requests[1].resolve({
+      text: "Complete reply",
+      model: "actual",
+      cost: 0,
+      stopped: null,
+    });
+    await waitFor(controller, (state) => !state.pending.length);
+    const final = (await readLatest(store)).messages.at(-1);
     assert.equal(final.id, failed.id);
     assert.equal(final.text, "Complete reply");
     assert.equal(final.status, "complete");
+  } finally {
+    await controller.dispose();
+    sqlite.close();
+  }
+});
+
+test("concurrent sends in one chat admit one reply; the second is refused before persistence", async () => {
+  const request = deferred();
+  const { controller, store, sqlite } = await setup(() => request.promise);
+  try {
+    const results = await Promise.all([
+      controller.send("First", []),
+      controller.send("Second", []),
+    ]);
+    assert.deepEqual(results, [true, false]);
+    assert.deepEqual(
+      (await readLatest(store)).messages.map((m) => m.text),
+      ["First", ""],
+    );
+    // Another chat replies meanwhile, and Stop reaches only the open chat.
+    assert.equal(await controller.select(null), true);
+    assert.equal(await controller.send("Elsewhere", []), true);
+    assert.deepEqual(
+      controller.state.getState().pending.map((run) => run.chatId),
+      ["chat", "chat-2"],
+    );
+    await controller.stop();
+    assert.deepEqual(
+      controller.state.getState().pending.map((run) => run.chatId),
+      ["chat"],
+    );
+    assert.equal(await controller.send("Again", []), true);
+  } finally {
+    await controller.dispose();
+    sqlite.close();
+  }
+});
+
+test("a reply whose save fails is kept in memory and closes only its chat to new turns", async () => {
+  const { controller, store, sqlite } = await setup(async () => ({
+    text: "Kept reply",
+    model: "test/model",
+    cost: 0,
+  }));
+  const finish = store.finishReply.bind(store);
+  store.finishReply = async () => {
+    throw new Error("disk");
+  };
+  try {
+    await controller.send("Hello", []);
+    await waitFor(controller, (s) => s.unsavedReplies.length === 1);
+    let state = controller.state.getState();
+    assert.equal(state.unsavedReplies[0].outcome.text, "Kept reply");
+    assert.deepEqual(state.pending, []);
+    assert.match(state.unsavedReplies[0].cause.message, /disk/);
+    assert.equal(state.error, null, "other chats hear nothing");
+    store.finishReply = finish;
+    assert.equal(await controller.send("Blocked?", []), false);
+    assert.match(controller.state.getState().error, /can’t continue/);
+    assert.equal((await readLatest(store)).messages.length, 2);
+    assert.equal(await controller.select(null), true);
+    assert.equal(await controller.send("Elsewhere", []), true);
+    await waitFor(
+      controller,
+      (s) => !s.pending.length && s.history.messages.length === 2,
+    );
+    state = controller.state.getState();
+    assert.equal(state.history.messages[1].text, "Kept reply");
+    assert.equal(state.unsavedReplies.length, 1);
+    assert.equal(await controller.remove("chat"), true);
+    assert.deepEqual(controller.state.getState().unsavedReplies, []);
+  } finally {
+    store.finishReply = finish;
+    await controller.dispose();
+    sqlite.close();
+  }
+});
+
+test("a reply cut short by a limit is saved as stopped, with its text and the reason", async () => {
+  for (const [stopped, reason] of [
+    ["length", "Reached the length limit."],
+    ["timeout", "Timed out."],
+  ]) {
+    const { controller, store, sqlite } = await setup(async () => ({
+      text: "Half an ans",
+      model: "test/model",
+      cost: 0,
+      stopped,
+    }));
+    try {
+      assert.equal(await controller.send("Question", []), true);
+      await waitFor(controller, (state) => state.pending.length === 0);
+      const reply = (await readLatest(store)).messages.at(-1);
+      assert.equal(reply.status, "cancelled");
+      assert.equal(reply.text, "Half an ans");
+      assert.equal(reply.error, reason);
+    } finally {
+      await controller.dispose();
+      sqlite.close();
+    }
+  }
+});
+
+test("retrying the latest finished reply replaces it in the same row", async () => {
+  let calls = 0;
+  const { controller, store, sqlite } = await setup(async () => ({
+    text: `Answer ${++calls}`,
+    model: "test/model",
+    cost: 0,
+    stopped: null,
+  }));
+  try {
+    await controller.send("Question", []);
+    await waitFor(controller, (state) => state.pending.length === 0);
+    const first = (await readLatest(store)).messages.at(-1);
+    assert.equal(first.text, "Answer 1");
+    assert.equal(await controller.retryReply(first.id), true);
+    await waitFor(controller, (state) => state.pending.length === 0);
+    const { messages } = await readLatest(store);
+    assert.equal(messages.length, 2);
+    assert.equal(messages.at(-1).id, first.id);
+    assert.equal(messages.at(-1).text, "Answer 2");
+    assert.equal(messages.at(-1).status, "complete");
   } finally {
     await controller.dispose();
     sqlite.close();

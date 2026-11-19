@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { editDraft, submitDraft } from "../src/chat/draft.ts";
+import { editDraft, submitDraft } from "../src/features/chat/runtime/draft.ts";
 
 function deferred() {
   let resolve, reject;
@@ -36,6 +36,7 @@ test("submit clears immediately and successful save cannot erase the next draft"
     },
     f.clear,
     f.restore,
+    false,
   );
   assert.equal(f.read(), "");
   assert.equal(f.draft.text, "");
@@ -49,7 +50,13 @@ for (const failure of ["rejected", "thrown"]) {
   test(`a ${failure} save restores the original text, including whitespace`, async () => {
     const f = fixture(),
       save = deferred();
-    const task = submitDraft(f.draft, () => save.promise, f.clear, f.restore);
+    const task = submitDraft(
+      f.draft,
+      () => save.promise,
+      f.clear,
+      f.restore,
+      false,
+    );
     if (failure === "thrown") {
       save.reject(new Error("Disk full"));
       await assert.rejects(task, /Disk full/);
@@ -65,7 +72,13 @@ for (const failure of ["rejected", "thrown"]) {
 test("failed save preserves a new draft, even if it was typed and deleted", async () => {
   const f = fixture(),
     save = deferred();
-  const task = submitDraft(f.draft, () => save.promise, f.clear, f.restore);
+  const task = submitDraft(
+    f.draft,
+    () => save.promise,
+    f.clear,
+    f.restore,
+    false,
+  );
   editDraft(f.draft, "Next");
   editDraft(f.draft, "");
   save.resolve(false);
@@ -77,7 +90,13 @@ test("failed save preserves a new draft, even if it was typed and deleted", asyn
 test("duplicate native change notifications do not count as user edits", async () => {
   const f = fixture(),
     save = deferred();
-  const task = submitDraft(f.draft, () => save.promise, f.clear, f.restore);
+  const task = submitDraft(
+    f.draft,
+    () => save.promise,
+    f.clear,
+    f.restore,
+    false,
+  );
   editDraft(f.draft, "");
   save.resolve(false);
   await task;

@@ -3,16 +3,22 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { connect, appendTurn } from "./sqlite-helper.mjs";
+import {
+  connect,
+  appendTurn,
+  readHistory,
+  readLatest,
+  savedChats,
+} from "./sqlite-helper.mjs";
 
 test("history persists across reopening; switching and new chat preserve messages", async () => {
   const dir = await mkdtemp(join(tmpdir(), "agyspeak-history-"));
   let connection = connect(join(dir, "history.db"));
   try {
     await connection.store.initialize();
-    assert.deepEqual(await connection.store.read(), {
+    assert.deepEqual(await readHistory(connection.store), {
       chats: [],
-      activeId: null,
+      activeId: "chat",
       selectedModel: null,
       messages: [],
     });
@@ -23,8 +29,8 @@ test("history persists across reopening; switching and new chat preserve message
       "A reply",
       1000,
     );
-    await connection.store.select(null);
-    assert.equal((await connection.store.read()).chats.length, 1);
+    await connection.store.activateNew();
+    assert.equal((await readHistory(connection.store)).chats.length, 1);
     await appendTurn(
       connection.store,
       "second",
@@ -35,15 +41,15 @@ test("history persists across reopening; switching and new chat preserve message
     connection.sqlite.close();
     connection = connect(join(dir, "history.db"));
     await connection.store.initialize();
-    let saved = await connection.store.read();
-    assert.equal(saved.activeId, "second");
+    let saved = await readHistory(connection.store);
+    assert.equal(saved.activeId, "chat", "startup opens the new chat");
     assert.deepEqual(
       saved.chats.map((chat) => chat.id),
       ["second", "first"],
     );
-    saved = await connection.store.select("first");
+    saved = await connection.store.activate("first");
     assert.deepEqual(
-      saved.messages.map((message) => message.text),
+      saved.chat.messages.map((message) => message.text),
       ["What's up?\n你好", "A reply"],
     );
     saved = await appendTurn(
@@ -53,9 +59,16 @@ test("history persists across reopening; switching and new chat preserve message
       "More text",
       3000,
     );
-    assert.equal(saved.chats[0].title, "What's up? 你好");
-    assert.equal(saved.chats[0].id, "first");
-    assert.equal(saved.messages.length, 4);
+    // The new chat is listed first, untitled; saved chats follow, newest first.
+    assert.deepEqual(
+      saved.chats.map(({ id, title }) => [id, title]),
+      [
+        ["chat", null],
+        ["first", "What's up? 你好"],
+        ["second", "Another chat"],
+      ],
+    );
+    assert.equal(saved.chat.messages.length, 4);
   } finally {
     connection.sqlite.close();
     await rm(dir, { recursive: true, force: true });
@@ -69,11 +82,14 @@ test("deleting a chat cascades to its messages and clears active selection only 
     await appendTurn(store, "first", "Keep", "Reply", 1);
     await appendTurn(store, "second", "Delete", "Reply", 2);
     await store.remove("first");
-    assert.equal((await store.read()).activeId, "second");
+    assert.deepEqual(
+      (await readHistory(store)).chats.map((chat) => chat.id),
+      ["second"],
+    );
     await store.remove("second");
-    assert.deepEqual(await store.read(), {
+    assert.deepEqual(await readHistory(store), {
       chats: [],
-      activeId: null,
+      activeId: "chat",
       selectedModel: null,
       messages: [],
     });
@@ -91,13 +107,13 @@ test("a failed reply insert rolls back the entire turn and selection", async () 
   try {
     await store.initialize();
     await appendTurn(store, "existing", "Keep me", "Original", 1);
-    const before = await store.read();
+    const before = await readHistory(store);
     sqlite.exec(`CREATE TRIGGER fail_reply BEFORE INSERT ON messages
       WHEN NEW.role = 'assistant' BEGIN SELECT RAISE(ABORT, 'disk failure simulation'); END;`);
-    await assert.rejects(appendTurn(store, "new", "Lost?", "No", 2));
-    assert.deepEqual(await store.read(), before);
+    await assert.rejects(appendTurn(store, before.activeId, "Lost?", "No", 2));
+    assert.deepEqual(await readHistory(store), before);
     await assert.rejects(appendTurn(store, "existing", "More?", "No", 3));
-    assert.deepEqual(await store.read(), before);
+    assert.deepEqual(await readHistory(store), before);
   } finally {
     sqlite.close();
   }
@@ -108,9 +124,9 @@ test("future database versions are rejected without resetting data", async () =>
   try {
     await store.initialize();
     await appendTurn(store, "existing", "Keep me", "Original", 1);
-    sqlite.exec("PRAGMA user_version = 11");
+    sqlite.exec("PRAGMA user_version = 16");
     await assert.rejects(store.initialize(), /Unsupported/);
-    assert.equal((await store.read()).messages.length, 2);
+    assert.equal((await readLatest(store)).messages.length, 2);
   } finally {
     sqlite.close();
   }
@@ -123,17 +139,26 @@ for (const existingChat of [false, true]) {
       await store.initialize();
       if (existingChat)
         await appendTurn(store, "chat", "Original", "First reply", 1);
-      const before = await store.read();
+      else await store.seedChat("chat");
+      const before = await savedChats(store);
       failRead();
       await assert.rejects(
-        store.beginReply("chat", "Hello", "test/model", 2),
+        store.beginReply(
+          "chat",
+          { kind: "text", text: "Hello", photos: [] },
+          "test/model",
+          2,
+        ),
         /snapshot read failure/,
       );
-      assert.deepEqual(await store.read(), before);
+      assert.deepEqual(await savedChats(store), before);
       const saved = await appendTurn(store, "chat", "Hello", "Reply", 2);
-      assert.equal(saved.chats.length, 1);
       assert.deepEqual(
-        saved.messages.map((message) => message.text),
+        (await savedChats(store)).map((chat) => chat.id),
+        ["chat"],
+      );
+      assert.deepEqual(
+        saved.chat.messages.map((message) => message.text),
         [
           ...(existingChat ? ["Original", "First reply"] : []),
           "Hello",
@@ -146,22 +171,19 @@ for (const existingChat of [false, true]) {
   });
 }
 
-test("schema migration keeps v1 messages and recovers interrupted pending replies", async () => {
+test("startup marks replies the app closed before finishing as failed", async () => {
   const { store, sqlite } = connect();
   try {
-    sqlite.exec(`CREATE TABLE chats(id TEXT PRIMARY KEY NOT NULL,title TEXT NOT NULL,updated_at INTEGER NOT NULL);
-      CREATE TABLE messages(id INTEGER PRIMARY KEY AUTOINCREMENT,chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,role TEXT NOT NULL,text TEXT NOT NULL);
-      CREATE TABLE app_state(id INTEGER PRIMARY KEY,active_chat_id TEXT REFERENCES chats(id) ON DELETE SET NULL);
-      INSERT INTO chats VALUES ('old','Old chat',1);
-      INSERT INTO messages(chat_id,role,text) VALUES ('old','user','Preserve me');
-      INSERT INTO app_state VALUES (1,'old'); PRAGMA user_version=1;`);
     await store.initialize();
-    let saved = await store.read();
-    assert.equal(saved.messages[0].text, "Preserve me");
-    assert.equal(saved.messages[0].status, "complete");
-    await store.beginReply("old", "Interrupted request", "test/model", 2);
+    await store.seedChat("chat");
+    await store.beginReply(
+      "chat",
+      { kind: "text", text: "Interrupted request", photos: [] },
+      "test/model",
+      2,
+    );
     await store.initialize();
-    saved = await store.read();
+    const saved = await readLatest(store);
     assert.equal(saved.messages.at(-1).status, "failed");
     assert.match(saved.messages.at(-1).error, /app closed/);
   } finally {
@@ -169,74 +191,51 @@ test("schema migration keeps v1 messages and recovers interrupted pending replie
   }
 });
 
-test("v2 history migrates without losing messages; audio survives completion and failed snapshots", async () => {
+test("audio survives completion and failed snapshots", async () => {
   const { store, sqlite, failRead } = connect();
   try {
     await store.initialize();
-    await appendTurn(store, "old", "Keep this chat", "Kept", 1);
-    sqlite.exec(
-      "ALTER TABLE messages DROP COLUMN elapsed_millis; ALTER TABLE chats DROP COLUMN selected_model; ALTER TABLE app_state DROP COLUMN draft_model; DROP TABLE draft_photos; DROP TABLE photos; DROP TABLE drafts; ALTER TABLE messages DROP COLUMN audio_length; ALTER TABLE messages DROP COLUMN audio_metadata; ALTER TABLE messages DROP COLUMN audio_data; ALTER TABLE messages DROP COLUMN audio_format; PRAGMA user_version=2;",
-    );
-    await store.initialize();
-    assert.equal((await store.read()).messages[0].text, "Keep this chat");
     const audio = { data: "UklGRg==", format: "wav" };
+    await store.seedChat("voice");
     const pending = await store.beginReply(
       "voice",
-      "Voice message",
+      { kind: "audio", audio: audio },
       "google/gemini-3.8-flash",
       2,
-      audio,
     );
-    const id = pending.messages.at(-1).id;
+    const id = pending.replyId;
     failRead();
     await assert.rejects(
-      store.finishReply(id, "complete", "Hello", null, null),
+      store.finishReply(id, {
+        status: "complete",
+        text: "Hello",
+        error: null,
+        model: null,
+        elapsedMillis: null,
+      }),
       /snapshot/,
     );
-    let saved = await store.read();
+    let saved = await readLatest(store);
     assert.deepEqual(saved.messages[0].audio, {
       id: saved.messages[0].id,
       encodedLength: audio.data.length,
       format: audio.format,
     });
     assert.equal(saved.messages[1].status, "pending");
-    saved = await store.finishReply(id, "complete", "Hello", null, null);
-    assert.deepEqual(saved.messages[0].audio, {
-      id: saved.messages[0].id,
+    saved = await store.finishReply(id, {
+      status: "complete",
+      text: "Hello",
+      error: null,
+      model: null,
+      elapsedMillis: null,
+    });
+    assert.deepEqual(saved.chat.messages[0].audio, {
+      id: saved.chat.messages[0].id,
       encodedLength: audio.data.length,
       format: audio.format,
     });
-    assert.equal(saved.messages[0].text, "Voice message");
-    assert.equal(saved.messages[1].status, "complete");
-  } finally {
-    sqlite.close();
-  }
-});
-
-test("v3 retained recordings migrate without changing audio or old transcripts", async () => {
-  const { store, sqlite } = connect();
-  try {
-    await store.initialize();
-    const audio = { data: "UklGRg==", format: "m4a" };
-    await store.beginReply(
-      "voice",
-      "Voice message",
-      "google/gemini-3.8-flash",
-      1,
-      audio,
-    );
-    sqlite.exec(
-      "ALTER TABLE messages DROP COLUMN elapsed_millis; ALTER TABLE chats DROP COLUMN selected_model; ALTER TABLE app_state DROP COLUMN draft_model; DROP TABLE draft_photos; DROP TABLE photos; DROP TABLE drafts; ALTER TABLE messages DROP COLUMN audio_length; ALTER TABLE messages DROP COLUMN audio_metadata; PRAGMA user_version=3;",
-    );
-    await store.initialize();
-    const saved = await store.read();
-    assert.deepEqual(saved.messages[0].audio, {
-      id: saved.messages[0].id,
-      encodedLength: audio.data.length,
-      format: audio.format,
-    });
-    assert.equal(saved.messages[1].status, "failed");
-    assert.equal(sqlite.prepare("PRAGMA user_version").get().user_version, 10);
+    assert.equal(saved.chat.messages[0].text, "Voice message");
+    assert.equal(saved.chat.messages[1].status, "complete");
   } finally {
     sqlite.close();
   }
@@ -252,23 +251,24 @@ test("display snapshots never read recording bytes; request context loads only s
       durationMillis: 1000,
       levels: Array.from({ length: 800 }, (_, i) => i / 800),
     };
+    await store.seedChat("voice");
     for (let i = 0; i < 4; i++) await appendVoice();
     async function appendVoice() {
       const pending = await store.beginReply(
         "voice",
-        "Voice message",
+        { kind: "audio", audio: audio },
         "selected/model",
         1,
-        audio,
       );
-      await store.finishReply(
-        pending.messages.at(-1).id,
-        "complete",
-        "Reply",
-        null,
-      );
+      await store.finishReply(pending.replyId, {
+        status: "complete",
+        text: "Reply",
+        error: null,
+        model: null,
+        elapsedMillis: null,
+      });
     }
-    const saved = await store.read();
+    const saved = await readLatest(store);
     assert.equal(saved.messages.filter((message) => message.audio).length, 4);
     assert.ok(
       JSON.stringify(saved).length < 10_000,
@@ -298,49 +298,31 @@ test("display snapshots never read recording bytes; request context loads only s
   }
 });
 
-test("v4 migration preserves recordings and populates lazy-loading metadata", async () => {
-  const { store, sqlite } = connect();
-  try {
-    await store.initialize();
-    await store.beginReply("old", "Voice message", "selected/model", 1, {
-      data: "UklGRg==",
-      format: "wav",
-    });
-    sqlite.exec(
-      "ALTER TABLE messages DROP COLUMN elapsed_millis; ALTER TABLE chats DROP COLUMN selected_model; ALTER TABLE app_state DROP COLUMN draft_model; DROP TABLE draft_photos; DROP TABLE photos; DROP TABLE drafts; ALTER TABLE messages DROP COLUMN audio_length; PRAGMA user_version=4;",
-    );
-    await store.initialize();
-    const saved = await store.read();
-    assert.equal(saved.messages[0].audio.encodedLength, 8);
-    assert.equal(saved.messages[0].audio.data, undefined);
-    assert.equal((await store.readContext("old"))[0].audio.data, "UklGRg==");
-  } finally {
-    sqlite.close();
-  }
-});
-
-test("drafts survive reopening and v5 migration preserves existing conversations", async () => {
+test("drafts survive reopening alongside existing conversations", async () => {
   const directory = await mkdtemp(join(tmpdir(), "agyspeak-drafts-"));
   const path = join(directory, "history.db");
   try {
     const first = connect(path);
     await first.store.initialize();
     await appendTurn(first.store, "chat", "Hello", "Hi", 1);
-    first.sqlite.exec(
-      "ALTER TABLE messages DROP COLUMN elapsed_millis; ALTER TABLE chats DROP COLUMN selected_model; ALTER TABLE app_state DROP COLUMN draft_model; DROP TABLE draft_photos; DROP TABLE photos; DROP TABLE drafts; PRAGMA user_version = 5",
-    );
     first.sqlite.close();
     const second = connect(path);
     await second.store.initialize();
-    assert.equal((await second.store.read()).messages.length, 2);
+    assert.equal((await readLatest(second.store)).messages.length, 2);
     await second.store.saveDraft("chat", "  unfinished\n");
-    await second.store.saveDraft(null, "new unfinished");
+    const fresh = (await second.store.readNewChat()).id;
+    assert.notEqual(fresh, "chat");
+    await second.store.saveDraft(fresh, "new unfinished");
     second.sqlite.close();
     const third = connect(path);
     await third.store.initialize();
     assert.equal(await third.store.readDraft("chat"), "  unfinished\n");
-    assert.equal(await third.store.readDraft(null), "new unfinished");
-    assert.equal((await third.store.read()).messages.length, 2);
+    assert.deepEqual(await third.store.readNewChat(), {
+      id: fresh,
+      selectedModel: null,
+      draft: { text: "new unfinished", photos: [] },
+    });
+    assert.equal((await readLatest(third.store)).messages.length, 2);
     third.sqlite.close();
   } finally {
     await rm(directory, { recursive: true, force: true });
