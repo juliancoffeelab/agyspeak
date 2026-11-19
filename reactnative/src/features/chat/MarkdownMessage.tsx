@@ -18,8 +18,12 @@ const parserFlags = { latexMath: false };
 
 export const MarkdownMessage = memo(function MarkdownMessage({
   text,
+  writing,
 }: {
   text: string;
+  // The text is still growing: the view takes each addition as a
+  // continuation of what it shows, and fades it in.
+  writing: boolean;
 }) {
   const colors = useColors();
   const markdownStyle = useMemo<MarkdownStyle>(() => {
@@ -85,6 +89,7 @@ export const MarkdownMessage = memo(function MarkdownMessage({
       markdown={text}
       flavor="github"
       selectable
+      streamingAnimation={writing}
       enableTaskListItemToggle={false}
       md4cFlags={parserFlags}
       markdownStyle={markdownStyle}

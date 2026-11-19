@@ -18,11 +18,12 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-test("elapsed response time is saved for completion, Stop and retry without using wall-clock timestamps", async () => {
+test("elapsed response time is saved for completion, Stop and retry without using wall-clock timestamps", async (t) => {
   const { store, sqlite } = connect();
   await store.initialize();
   let now = 1000,
     attempt = deferred();
+  t.mock.method(performance, "now", () => now);
   const controller = await coordinator({
     store,
     openAt: await latestId(store),
@@ -30,7 +31,6 @@ test("elapsed response time is saved for completion, Stop and retry without usin
       onText("partial");
       return attempt.promise;
     },
-    now: () => now,
     settings: () => settings,
   });
   try {

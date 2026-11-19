@@ -131,7 +131,6 @@ export async function openResources(
       }),
       audioIssue: (model) => audioInputIssue(model, catalog()),
       imageIssue: (model) => imageInputIssue(model, catalog()),
-      now: () => performance.now(),
     });
     // The saved chats are listed after the new chat opens; History shows
     // their loading or failure.
