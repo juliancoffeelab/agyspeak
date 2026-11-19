@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
-import { Alert, Image, Pressable, StyleSheet, Text, View } from "react-native";
-import { LegendList, type LegendListRef } from "@legendapp/list/react-native";
+import { Image, Pressable, StyleSheet, Text, View } from "react-native";
+import type { LegendListRef } from "@legendapp/list/react-native";
+import { KeyboardAwareLegendList } from "@legendapp/list/keyboard";
 
 import { ResponseActions } from "./ResponseActions";
 import { MarkdownMessage } from "./MarkdownMessage";
@@ -13,6 +14,8 @@ import {
   REPLY_UNSAVED,
   type PendingReply,
 } from "./runtime/coordinator";
+import { useDockedList } from "../../ui/Screen";
+import { notify } from "../../ui/notice";
 import { useColors } from "../../ui/theme";
 import { screenStyles } from "../../ui/screenStyles";
 import { ConfirmDialog } from "../../ui/ConfirmDialog";
@@ -48,10 +51,11 @@ export function Conversation({
   // The finished reply awaiting confirmation that a new one may replace it.
   const [replacing, setReplacing] = useState<number | null>(null);
   function retry(id: number) {
-    if (retryIssue) Alert.alert("Input unavailable", retryIssue);
+    if (retryIssue) notify("Input unavailable", retryIssue);
     else void commands.retryReply(id);
   }
   const listRef = useRef<LegendListRef>(null);
+  const docked = useDockedList();
   const handledSendRef = useRef(scrollRequest);
 
   useLayoutEffect(() => {
@@ -78,8 +82,9 @@ export function Conversation({
           onCancel={() => setReplacing(null)}
         />
       )}
-      <LegendList
+      <KeyboardAwareLegendList
         ref={listRef}
+        {...docked}
         data={history.messages}
         initialScrollAtEnd
         maintainScrollAtEnd

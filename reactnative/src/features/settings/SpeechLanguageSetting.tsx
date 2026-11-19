@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { Alert, Pressable, Text, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
 import { useStore } from "zustand";
 import { speechLanguageLabel } from "../../device/speech/language";
 import type { PreferencesOwner } from "../../preferences/preferences";
 import { settingsStyles as styles } from "../../ui/settingsStyles";
 import { SpeechLanguagePicker } from "../../ui/SpeechLanguagePicker";
+import { notify } from "../../ui/notice";
 import { useColors } from "../../ui/theme";
 
 // The read-aloud language for responses without their own choice.
@@ -36,7 +37,7 @@ export function SpeechLanguageSetting({
           unsetLabel="Device default"
           onSelect={(code) => {
             preferences.saveSpeechLanguage(code).catch(() => {
-              Alert.alert("Couldn’t save the read-aloud language.");
+              notify("Couldn’t save the read-aloud language.", null);
             });
           }}
           onClose={() => setChoosing(false)}

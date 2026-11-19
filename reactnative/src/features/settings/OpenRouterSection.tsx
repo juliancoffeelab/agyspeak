@@ -5,13 +5,11 @@ import RefreshCw from "lucide-react-native/icons/refresh-cw";
 import {
   ActivityIndicator,
   Keyboard,
-  Modal,
   Pressable,
   Text,
   TextInput,
   View,
 } from "react-native";
-import { SafeAreaProvider } from "react-native-safe-area-context";
 import { KeyScanner } from "./KeyScanner";
 import { dollars } from "../../providers/openrouter/metadata";
 import { parseKeyInput } from "../../providers/openrouter/key";
@@ -22,8 +20,9 @@ import type { OpenRouterConnection } from "../../connections/openrouter";
 import { ConfirmDialog } from "../../ui/ConfirmDialog";
 import { Failure } from "../../ui/Failure";
 
-// The key editor and spending once the saved key is read; until then the
-// section shows the read, or its failure with a way to read it again.
+// The key editor and spending. It has its final layout while the saved key
+// is still being read, with nothing to edit yet; a failed read shows in its
+// place with a way to read again.
 export function OpenRouterSection({
   connection,
 }: {
@@ -31,7 +30,15 @@ export function OpenRouterSection({
 }) {
   const colors = useColors();
   const key = useStore(connection.state);
-  if (key.status === "ready") return <KeyEditor connection={connection} />;
+  if (key.status !== "failed")
+    return (
+      // The editor starts over from the key once it is read.
+      <KeyEditor
+        key={key.status}
+        connection={connection}
+        ready={key.status === "ready"}
+      />
+    );
   return (
     <View
       style={[
@@ -43,29 +50,29 @@ export function OpenRouterSection({
       <View style={styles.sectionHeading}>
         <Text style={[styles.label, { color: colors.text }]}>OpenRouter</Text>
       </View>
-      {key.status === "reading" ? (
-        <ActivityIndicator
-          accessibilityLabel="Reading the saved key"
-          color={colors.muted}
-        />
-      ) : (
-        <Failure
-          message="Couldn’t read the saved key."
-          hint={null}
-          error={key.failure}
-          onRetry={() => void connection.reload()}
-          onDismiss={null}
-        />
-      )}
+      <Failure
+        message="Couldn’t read the saved key."
+        hint={null}
+        error={key.failure}
+        onRetry={() => void connection.reload()}
+        onDismiss={null}
+      />
     </View>
   );
 }
 
-function KeyEditor({ connection }: { connection: OpenRouterConnection }) {
+function KeyEditor({
+  connection,
+  ready,
+}: {
+  connection: OpenRouterConnection;
+  // Whether the saved key is read; until then nothing can be edited.
+  ready: boolean;
+}) {
   const colors = useColors();
   // Rerender on credential replacement so the saved key below is current.
   useStore(connection.state);
-  const savedKey = connection.readForEditing();
+  const savedKey = ready ? connection.readForEditing() : "";
   const [apiKey, setApiKey] = useState(savedKey);
   const [saving, setSaving] = useState(false);
   const [scanning, setScanning] = useState(false);
@@ -140,7 +147,7 @@ function KeyEditor({ connection }: { connection: OpenRouterConnection }) {
           onPress={spending.refresh}
           style={styles.iconButton}
         >
-          {spending.loading ? (
+          {spending.loading || !ready ? (
             <ActivityIndicator size="small" color={colors.muted} />
           ) : (
             <RefreshCw
@@ -194,15 +201,6 @@ function KeyEditor({ connection }: { connection: OpenRouterConnection }) {
           {status}
         </Text>
       </View>
-      {keyError === null && spending.failure && (
-        <Failure
-          message={spending.error ?? "Couldn’t load spending."}
-          hint={null}
-          error={spending.failure}
-          onRetry={null}
-          onDismiss={null}
-        />
-      )}
       <TextInput
         accessibilityLabel="OpenRouter API key"
         value={apiKey}
@@ -211,6 +209,7 @@ function KeyEditor({ connection }: { connection: OpenRouterConnection }) {
           setKeyError(null);
         }}
         onSubmitEditing={() => Keyboard.dismiss()}
+        editable={ready}
         secureTextEntry
         autoCapitalize="none"
         autoCorrect={false}
@@ -222,20 +221,19 @@ function KeyEditor({ connection }: { connection: OpenRouterConnection }) {
       <View style={styles.actions}>
         <Pressable
           accessibilityRole="button"
+          disabled={!ready}
           onPress={() => {
             void paste();
           }}
-          style={styles.action}
+          style={[styles.action, { opacity: ready ? 1 : 0.4 }]}
         >
           <Text style={{ color: colors.text }}>Paste key</Text>
         </Pressable>
         <Pressable
           accessibilityRole="button"
-          onPress={() => {
-            Keyboard.dismiss();
-            setScanning(true);
-          }}
-          style={styles.action}
+          disabled={!ready}
+          onPress={() => setScanning(true)}
+          style={[styles.action, { opacity: ready ? 1 : 0.4 }]}
         >
           <Text style={{ color: colors.text }}>Scan QR</Text>
         </Pressable>
@@ -250,15 +248,25 @@ function KeyEditor({ connection }: { connection: OpenRouterConnection }) {
         </Pressable>
         <Pressable
           accessibilityRole="button"
-          disabled={saving}
+          disabled={saving || !ready}
           onPress={save}
-          style={[styles.action, { opacity: saving ? 0.5 : 1 }]}
+          style={[styles.action, { opacity: saving || !ready ? 0.5 : 1 }]}
         >
           <Text style={{ color: colors.text, fontWeight: "600" }}>
             {saving ? "Saving…" : "Save"}
           </Text>
         </Pressable>
       </View>
+      {/* Below the field, so that showing it moves nothing being typed in. */}
+      {spending.failure && (
+        <Failure
+          message={spending.error ?? "Couldn’t load spending."}
+          hint={null}
+          error={spending.failure}
+          onRetry={null}
+          onDismiss={null}
+        />
+      )}
       {replacement !== null && (
         <ConfirmDialog
           title={replacement ? "Replace API key?" : "Remove API key?"}
@@ -281,21 +289,13 @@ function KeyEditor({ connection }: { connection: OpenRouterConnection }) {
         />
       )}
       {scanning && (
-        <Modal
-          visible
-          animationType="slide"
-          onRequestClose={() => setScanning(false)}
-        >
-          <SafeAreaProvider>
-            <KeyScanner
-              onRead={(key) => {
-                acceptKey(key);
-                setScanning(false);
-              }}
-              onClose={() => setScanning(false)}
-            />
-          </SafeAreaProvider>
-        </Modal>
+        <KeyScanner
+          onRead={(key) => {
+            acceptKey(key);
+            setScanning(false);
+          }}
+          onClose={() => setScanning(false)}
+        />
       )}
     </View>
   );

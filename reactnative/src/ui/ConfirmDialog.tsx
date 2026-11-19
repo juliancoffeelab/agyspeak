@@ -1,12 +1,66 @@
-import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
+import type { ReactNode } from "react";
+import { Pressable, StyleSheet, Text, View } from "react-native";
+import { useStore } from "zustand";
 
+import { acknowledgeNotice, notices } from "./notice";
+import { Overlay } from "./Overlay";
 import { useColors } from "./theme";
 
-// Asks before an action that discards something. Dismissing it in any way
-// (the cancel choice, the backdrop, the back button) is `onCancel`. The
-// choices are text buttons at the trailing edge, confirming one last;
-// `danger` colours a confirmation that loses something the person can't
-// get back from the app.
+// A dialog's card: what it says, then its choices as text buttons at the
+// trailing edge. Dismissing it in any way (the backdrop, the back button) is
+// `onClose`, which `closeLabel` names.
+function Dialog({
+  title,
+  message,
+  closeLabel,
+  onClose,
+  children,
+}: {
+  title: string;
+  message: string | null;
+  closeLabel: string;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const colors = useColors();
+  return (
+    <Overlay placement="center" closeLabel={closeLabel} onClose={onClose}>
+      <View accessibilityRole="alert" style={styles.card}>
+        <Text style={[styles.title, { color: colors.text }]}>{title}</Text>
+        {message !== null && (
+          <Text style={[styles.message, { color: colors.muted }]}>
+            {message}
+          </Text>
+        )}
+        <View style={styles.actions}>{children}</View>
+      </View>
+    </Overlay>
+  );
+}
+
+function Choice({
+  label,
+  color,
+  onPress,
+}: {
+  label: string;
+  color: string;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      onPress={onPress}
+      style={styles.action}
+    >
+      <Text style={[styles.label, { color }]}>{label}</Text>
+    </Pressable>
+  );
+}
+
+// Asks before an action that discards something. Dismissing it is
+// `onCancel`. The confirming choice comes last; `danger` colours a
+// confirmation that loses something the person can't get back from the app.
 export function ConfirmDialog({
   title,
   message,
@@ -26,67 +80,41 @@ export function ConfirmDialog({
 }) {
   const colors = useColors();
   return (
-    <Modal transparent animationType="fade" onRequestClose={onCancel}>
-      <View style={styles.overlay}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={cancelLabel}
-          onPress={onCancel}
-          style={StyleSheet.absoluteFill}
-        />
-        <View
-          accessibilityRole="alert"
-          accessibilityViewIsModal
-          onAccessibilityEscape={onCancel}
-          style={[styles.card, { backgroundColor: colors.surface }]}
-        >
-          <Text style={[styles.title, { color: colors.text }]}>{title}</Text>
-          <Text style={[styles.message, { color: colors.muted }]}>
-            {message}
-          </Text>
-          <View style={styles.actions}>
-            <Pressable
-              accessibilityRole="button"
-              onPress={onCancel}
-              style={styles.action}
-            >
-              <Text style={[styles.label, { color: colors.muted }]}>
-                {cancelLabel}
-              </Text>
-            </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              onPress={onConfirm}
-              style={styles.action}
-            >
-              <Text
-                style={[
-                  styles.label,
-                  { color: tone === "danger" ? colors.danger : colors.text },
-                ]}
-              >
-                {confirmLabel}
-              </Text>
-            </Pressable>
-          </View>
-        </View>
-      </View>
-    </Modal>
+    <Dialog
+      title={title}
+      message={message}
+      closeLabel={cancelLabel}
+      onClose={onCancel}
+    >
+      <Choice label={cancelLabel} color={colors.muted} onPress={onCancel} />
+      <Choice
+        label={confirmLabel}
+        color={tone === "danger" ? colors.danger : colors.text}
+        onPress={onConfirm}
+      />
+    </Dialog>
+  );
+}
+
+// Shows the oldest notice waiting to be acknowledged. Mounted once.
+export function NoticeDialog() {
+  const colors = useColors();
+  const notice = useStore(notices, (waiting) => waiting.at(0));
+  if (!notice) return null;
+  return (
+    <Dialog
+      title={notice.title}
+      message={notice.message}
+      closeLabel="OK"
+      onClose={acknowledgeNotice}
+    >
+      <Choice label="OK" color={colors.text} onPress={acknowledgeNotice} />
+    </Dialog>
   );
 }
 
 const styles = StyleSheet.create({
-  overlay: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    padding: 24,
-    backgroundColor: "rgba(0,0,0,0.4)",
-  },
   card: {
-    width: "100%",
-    maxWidth: 400,
-    borderRadius: 20,
     paddingTop: 24,
     paddingHorizontal: 24,
     paddingBottom: 12,

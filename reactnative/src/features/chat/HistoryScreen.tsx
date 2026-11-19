@@ -1,18 +1,18 @@
 import {
   ActivityIndicator,
   FlatList,
-  Keyboard,
   Pressable,
   StyleSheet,
   Text,
   View,
 } from "react-native";
 import { useState, type ReactNode } from "react";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 
 import type { ChatSummary } from "./storage/contracts";
 import { ChatHeader } from "../../ui/ChatHeader";
+import { Screen } from "../../ui/Screen";
+import { Toast } from "../../ui/Toast";
 import { useColors } from "../../ui/theme";
 import { screenStyles } from "../../ui/screenStyles";
 import { ConfirmDialog } from "../../ui/ConfirmDialog";
@@ -38,7 +38,6 @@ function useOpenChat() {
   const router = useRouter();
   const commands = useOpenChatScope()?.chat;
   return (id: string | null) => {
-    Keyboard.dismiss();
     if (commands?.state.getState().history.activeId !== id)
       void commands?.select(id);
     router.dismissTo("/");
@@ -55,9 +54,7 @@ export function HistoryScreen({ status }: { status: ReactNode }) {
   const open = useOpenChatScope() !== null;
   const onOpen = useOpenChat();
   return (
-    <SafeAreaView
-      style={[styles.screen, { backgroundColor: colors.background }]}
-    >
+    <Screen keyboard="pad" background={colors.background}>
       <ChatHeader
         mode="history"
         newChatDisabled={!open || busy}
@@ -71,7 +68,7 @@ export function HistoryScreen({ status }: { status: ReactNode }) {
       ) : (
         <View style={[styles.screen, styles.pending]}>{status}</View>
       )}
-    </SafeAreaView>
+    </Screen>
   );
 }
 
@@ -94,7 +91,10 @@ function OpenHistory() {
   const [deleting, setDeleting] = useState<SavedChat | null>(null);
 
   return (
-    <>
+    <View style={styles.screen}>
+      {error !== null && (
+        <Toast message={error} onDismiss={() => commands.dismissError()} />
+      )}
       {deleting && (
         <ConfirmDialog
           title="Delete chat?"
@@ -108,14 +108,6 @@ function OpenHistory() {
           }}
           onCancel={() => setDeleting(null)}
         />
-      )}
-      {error !== null && (
-        <Text
-          accessibilityRole="alert"
-          style={[styles.error, { color: colors.text }]}
-        >
-          {error}
-        </Text>
       )}
       <FlatList
         // The new chat is listed only while it holds an unsent draft. The
@@ -181,7 +173,7 @@ function OpenHistory() {
           />
         )}
       />
-    </>
+    </View>
   );
 }
 

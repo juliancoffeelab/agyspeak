@@ -6,15 +6,20 @@ import {
 } from "expo-router/js-stack";
 import { StatusBar } from "expo-status-bar";
 import { Easing, useColorScheme } from "react-native";
+import { KeyboardProvider } from "react-native-keyboard-controller";
 
 import { AppScope } from "../application/AppScope";
 import { queryClient } from "../application/queryClient";
 import { useResources } from "../application/useResources";
+import { NoticeDialog } from "../ui/ConfirmDialog";
+import { OverlayHost } from "../ui/Overlay";
 
 export default function RootLayout() {
   return (
     <QueryClientProvider client={queryClient}>
-      <Root />
+      <KeyboardProvider>
+        <Root />
+      </KeyboardProvider>
     </QueryClientProvider>
   );
 }
@@ -45,13 +50,16 @@ function Root() {
     <>
       <StatusBar style={dark ? "light" : "dark"} />
       <AppScope startup={startup} retry={retry}>
-        <Stack screenOptions={{ headerShown: false }}>
-          {/* The one chat destination; the coordinator owns which chat it
-              shows. */}
-          <Stack.Screen name="index" />
-          <Stack.Screen name="history" options={overChat} />
-          <Stack.Screen name="settings" options={overChat} />
-        </Stack>
+        <OverlayHost>
+          <Stack screenOptions={{ headerShown: false }}>
+            {/* The one chat destination; the coordinator owns which chat it
+                shows. */}
+            <Stack.Screen name="index" />
+            <Stack.Screen name="history" options={overChat} />
+            <Stack.Screen name="settings" options={overChat} />
+          </Stack>
+          <NoticeDialog />
+        </OverlayHost>
       </AppScope>
     </>
   );

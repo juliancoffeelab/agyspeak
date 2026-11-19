@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { Alert, Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import Copy from "lucide-react-native/icons/copy";
 import Check from "lucide-react-native/icons/check";
@@ -11,6 +11,7 @@ import { SpeechLanguagePicker } from "../../ui/SpeechLanguagePicker";
 import { useStore } from "zustand";
 import { useChatScope } from "./chatContext";
 import Square from "lucide-react-native/icons/square";
+import { notify } from "../../ui/notice";
 import { useColors } from "../../ui/theme";
 
 export const ResponseActions = memo(function ResponseActions({
@@ -71,7 +72,7 @@ export const ResponseActions = memo(function ResponseActions({
       if (timerRef.current) clearTimeout(timerRef.current);
       timerRef.current = setTimeout(() => setCopiedId(null), 1800);
     } catch {
-      Alert.alert("Couldn’t copy the response.");
+      notify("Couldn’t copy the response.", null);
     }
   }
   return (

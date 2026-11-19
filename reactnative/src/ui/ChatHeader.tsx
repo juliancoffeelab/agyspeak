@@ -163,7 +163,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 5,
   },
-  modelTitle: { flexShrink: 1, fontSize: 18, fontWeight: "600" },
+  // Fills the selector, so the chevron stays put as the name changes.
+  modelTitle: { flex: 1, fontSize: 18, fontWeight: "600" },
   title: { flex: 1, fontSize: 22, fontWeight: "700", letterSpacing: -0.6 },
   actions: { flexDirection: "row", alignItems: "center", gap: 4 },
   action: {
