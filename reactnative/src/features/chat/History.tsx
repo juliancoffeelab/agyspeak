@@ -7,7 +7,6 @@ import {
   View,
 } from "react-native";
 import { useState, type ReactNode } from "react";
-import { useRouter } from "expo-router";
 
 import type { ChatSummary } from "./storage/contracts";
 import { ChatHeader } from "../../ui/ChatHeader";
@@ -26,45 +25,44 @@ import {
   useChatState,
   useOpenChatState,
   useDraftPreview,
+  useDrafted,
 } from "./chatContext";
 
 // A chat its first message has saved, which has a title and can be deleted.
 type SavedChat = ChatSummary & { title: string };
 const isSaved = (chat: ChatSummary): chat is SavedChat => chat.title !== null;
 
-// Returns to the chat screen at once; the coordinator opens the chosen chat
-// and the chat screen shows the result.
-function useOpenChat() {
-  const router = useRouter();
-  const commands = useOpenChatScope()?.chat;
-  return (id: string | null) => {
-    if (commands?.state.getState().history.activeId !== id)
-      void commands?.select(id);
-    router.dismissTo("/");
-  };
-}
-
-// Saved chats: opening one, starting a new chat and confirmed deletion. One
-// layout is mounted from the first frame; `status` fills the list's place
-// until the chats are open.
-export function HistoryScreen({ status }: { status: ReactNode }) {
-  const router = useRouter();
+// Saved chats, in the panel beside the chat: opening one, starting a new chat
+// and confirmed deletion. It stays mounted while the panel is closed, so it
+// keeps its place in the list. `status` fills the list's place until the
+// chats are open.
+export function History({
+  status,
+  onOpenChat,
+  onClose,
+  onOpenSettings,
+}: {
+  status: ReactNode;
+  // Null opens the new chat.
+  onOpenChat: (id: string | null) => void;
+  onClose: () => void;
+  onOpenSettings: () => void;
+}) {
   const colors = useColors();
   const busy = useOpenChatState((state) => state.saving, true);
   const open = useOpenChatScope() !== null;
-  const onOpen = useOpenChat();
   return (
     <Screen keyboard="pad" background={colors.background}>
       <ChatHeader
         mode="history"
         newChatDisabled={!open || busy}
         navigationDisabled={false}
-        onNewChat={() => onOpen(null)}
-        onNavigate={() => router.back()}
-        onSettings={() => router.push("/settings")}
+        onNewChat={() => onOpenChat(null)}
+        onNavigate={onClose}
+        onSettings={onOpenSettings}
       />
       {open ? (
-        <OpenHistory />
+        <OpenHistory onOpenChat={onOpenChat} />
       ) : (
         <View style={[styles.screen, styles.pending]}>{status}</View>
       )}
@@ -72,7 +70,7 @@ export function HistoryScreen({ status }: { status: ReactNode }) {
   );
 }
 
-function OpenHistory() {
+function OpenHistory({ onOpenChat }: { onOpenChat: (id: string) => void }) {
   const colors = useColors();
   const { chat: commands } = useChatScope();
   const chats = useChatState((state) => state.history.chats);
@@ -82,11 +80,10 @@ function OpenHistory() {
   const error = useChatState((state) => state.error);
   const unsent = useChatState((state) => state.history.messages.length === 0);
   // The open chat's draft is the live one; the list has it as last saved.
-  const activeDraft = useDraftPreview(
+  const activeDrafted = useDrafted(
     activeId,
     chats?.find((chat) => chat.id === activeId)?.draft ?? null,
   );
-  const onOpen = useOpenChat();
 
   const [deleting, setDeleting] = useState<SavedChat | null>(null);
 
@@ -128,7 +125,7 @@ function OpenHistory() {
         ).filter(
           (chat) =>
             isSaved(chat) ||
-            (chat.id === activeId ? activeDraft : chat.draft) !== null,
+            (chat.id === activeId ? activeDrafted : chat.draft !== null),
         )}
         keyExtractor={(row) => row.id}
         contentContainerStyle={styles.historyList}
@@ -168,7 +165,7 @@ function OpenHistory() {
             item={item}
             active={item.id === activeId}
             busy={busy}
-            onOpen={() => onOpen(item.id)}
+            onOpen={() => onOpenChat(item.id)}
             onDelete={setDeleting}
           />
         )}

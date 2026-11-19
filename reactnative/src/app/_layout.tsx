@@ -24,7 +24,7 @@ export default function RootLayout() {
   );
 }
 
-// History and Settings slide over the chat, as the screens they replaced did.
+// Settings slides over the chat.
 const SLIDE_MS = 200;
 const overChat: StackNavigationOptions = {
   gestureEnabled: false,
@@ -52,10 +52,9 @@ function Root() {
       <AppScope startup={startup} retry={retry}>
         <OverlayHost>
           <Stack screenOptions={{ headerShown: false }}>
-            {/* The one chat destination; the coordinator owns which chat it
-                shows. */}
+            {/* The one chat destination, with History beside it; the
+                coordinator owns which chat it shows. */}
             <Stack.Screen name="index" />
-            <Stack.Screen name="history" options={overChat} />
             <Stack.Screen name="settings" options={overChat} />
           </Stack>
           <NoticeDialog />
