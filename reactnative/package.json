@@ -59,7 +59,7 @@
     "typescript-eslint": "^8.72.1"
   },
   "scripts": {
-    "start": "expo start",
+    "start": "sh scripts/android.sh start",
     "android": "sh scripts/android.sh run:android --app-id dev.agyspeak.app.dev",
     "android:release": "sh scripts/android.sh run:android --variant release --app-id dev.agyspeak.app",
     "android:usb": "sh scripts/android.sh install-release",

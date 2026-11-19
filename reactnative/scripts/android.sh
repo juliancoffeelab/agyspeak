@@ -8,6 +8,33 @@ if [ -z "${JAVA_HOME:-}" ] && [ -d "/Applications/Android Studio.app/Contents/jb
 fi
 export PATH="${JAVA_HOME:+$JAVA_HOME/bin:}$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
 
+# A USB phone reaches Metro through the cable, on the port Metro listens on.
+if [ "${1:-}" = "start" ]; then
+  port=${RCT_METRO_PORT:-8081}
+  previous=
+  for argument in "$@"; do
+    case "$previous" in --port | -p) port=$argument ;; esac
+    case "$argument" in --port=*) port=${argument#--port=} ;; esac
+    previous=$argument
+  done
+  # Expo picks another port when none is given or the given one is taken.
+  case "$port" in
+    '' | 0 | *[!0-9]*) port= ;;
+    *) if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then port=; fi ;;
+  esac
+  if [ "$(adb -d get-state 2>/dev/null || true)" != "device" ]; then
+    printf 'No USB phone to forward Metro to; continuing.\n' >&2
+  elif [ -n "$port" ]; then
+    # A known, free port: forward it and start Metro, nothing more. A phone
+    # that was detected but can't be forwarded to stops the start here.
+    adb -d reverse "tcp:$port" "tcp:$port" >/dev/null
+  else
+    # Only Expo knows the port it ends up on. It forwards that port as part
+    # of opening the app, so this start opens the app on the phone on purpose.
+    set -- "$@" --android
+  fi
+fi
+
 usb_serial=
 if [ "${1:-}" = "install-release" ]; then
   if ! usb_serial=$(adb -d get-serialno) || [ "$usb_serial" = "unknown" ]; then
