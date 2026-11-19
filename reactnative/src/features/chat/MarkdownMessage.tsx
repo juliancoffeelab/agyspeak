@@ -1,16 +1,17 @@
 import { memo, useMemo } from "react";
-import { Alert, Linking, Platform } from "react-native";
+import { Linking, Platform } from "react-native";
 import {
   EnrichedMarkdownText,
   type MarkdownStyle,
 } from "react-native-enriched-markdown";
+import { notify } from "../../ui/notice";
 import { useColors } from "../../ui/theme";
 
 function openLink({ url }: { url: string }) {
   // Markdown links navigate only on an explicit tap, through the platform browser.
   if (!/^https?:\/\//i.test(url)) return;
   void Linking.openURL(url).catch(() =>
-    Alert.alert("Couldn’t open this link."),
+    notify("Couldn’t open this link.", null),
   );
 }
 const parserFlags = { latexMath: false };

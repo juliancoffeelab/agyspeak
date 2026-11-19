@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
-  Alert,
   Image,
   ScrollView,
   Keyboard,
@@ -29,6 +28,7 @@ import type {
   Message,
 } from "./storage/contracts";
 import { MAX_MESSAGE_LENGTH } from "./storage/contracts";
+import { notify } from "../../ui/notice";
 import { useColors } from "../../ui/theme";
 import { useStore } from "zustand";
 import { useChatScope, useChatModel, useChatState } from "./chatContext";
@@ -243,7 +243,7 @@ function DraftComposer({
   }
 
   function explain(message: string) {
-    Alert.alert("Input unavailable", message);
+    notify("Input unavailable", message);
   }
 
   const capture = recording.state;

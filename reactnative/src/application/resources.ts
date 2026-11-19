@@ -3,7 +3,7 @@ import { fetch as streamingFetch } from "expo/fetch";
 import { randomUUID } from "expo-crypto";
 import { File } from "expo-file-system";
 import * as SecureStore from "expo-secure-store";
-import { Alert, AppState } from "react-native";
+import { AppState } from "react-native";
 
 import {
   audioInputIssue,
@@ -43,6 +43,7 @@ import { catalogStorage } from "../providers/openrouter/catalogFile";
 import { completeReply } from "../providers/openrouter/transport";
 import { openHistory } from "../storage/historyMigration";
 import { systemLanguage } from "../device/locale";
+import { notify } from "../ui/notice";
 
 export type AppResources = {
   connection: OpenRouterConnection;
@@ -144,12 +145,12 @@ export async function openResources(
           queryKey: speechVoicesQuery.queryKey,
           refetchType: "none",
         }),
-      onError: (message) => Alert.alert("Read aloud", message),
+      onError: (message) => notify("Read aloud", message),
     });
     const responseSpeech = createResponseSpeech({
       speech,
       defaultLanguage: () => preferences.state.getState().speechLanguage,
-      onError: (message) => Alert.alert("Read aloud", message),
+      onError: (message) => notify("Read aloud", message),
     });
     queryClient.query(speechVoicesQuery).catch(() => undefined);
     const resources: AppResources = {

@@ -11,6 +11,7 @@ import { KeyboardProvider } from "react-native-keyboard-controller";
 import { AppScope } from "../application/AppScope";
 import { queryClient } from "../application/queryClient";
 import { useResources } from "../application/useResources";
+import { NoticeDialog } from "../ui/ConfirmDialog";
 import { OverlayHost } from "../ui/Overlay";
 
 export default function RootLayout() {
@@ -57,6 +58,7 @@ function Root() {
             <Stack.Screen name="history" options={overChat} />
             <Stack.Screen name="settings" options={overChat} />
           </Stack>
+          <NoticeDialog />
         </OverlayHost>
       </AppScope>
     </>

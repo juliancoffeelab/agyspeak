@@ -129,6 +129,12 @@ export default defineConfig([
                 "Show it with Overlay (src/ui/Overlay.tsx): a Modal is a separate window and takes focus from the keyboard.",
             },
             {
+              name: "react-native",
+              importNames: ["Alert"],
+              message:
+                "Tell the person with notify (src/ui/notice.ts): a stock alert is a separate window and takes focus from the keyboard.",
+            },
+            {
               name: "react-native-safe-area-context",
               importNames: ["SafeAreaView", "SafeAreaProvider"],
               message: "Lay the layer out with Screen (src/ui/Screen.tsx).",
