@@ -18,11 +18,16 @@ export const ResponseActions = memo(function ResponseActions({
   id,
   markdown,
   elapsedMillis,
+  writing,
   retry,
 }: {
   id: number;
   markdown: string;
   elapsedMillis: number | null;
+  // The reply is still being written: the row holds its place, unseen, so
+  // that it neither appears with a jump at the end nor rides the growing
+  // text on screen.
+  writing: boolean;
   // Asking the model again, on the chat's latest reply; `issue` is why the
   // chat's model can't take this conversation.
   retry: {
@@ -76,7 +81,11 @@ export const ResponseActions = memo(function ResponseActions({
     }
   }
   return (
-    <View style={styles.row}>
+    <View
+      style={[styles.row, writing && styles.unseen]}
+      pointerEvents={writing ? "none" : "auto"}
+      importantForAccessibility={writing ? "no-hide-descendants" : "auto"}
+    >
       {pickerId === id && (
         <SpeechLanguagePicker
           selected={override}
@@ -164,6 +173,7 @@ export const ResponseActions = memo(function ResponseActions({
 });
 const styles = StyleSheet.create({
   row: { flexDirection: "row", alignItems: "center", marginTop: 6 },
+  unseen: { opacity: 0 },
   button: {
     width: 40,
     height: 40,

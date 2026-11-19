@@ -157,6 +157,9 @@ export async function latestId(store) {
   return (await savedChats(store))[0]?.id ?? null;
 }
 
+// Node has no display: a frame is the next turn of its event loop.
+globalThis.requestAnimationFrame = (run) => setTimeout(run, 0);
+
 // A coordinator started as the app starts it, on the new chat with the saved
 // chats listed, then opened at `openAt`. A test names only what it is about.
 export async function coordinator({ openAt, ...options }) {
@@ -165,7 +168,6 @@ export async function coordinator({ openAt, ...options }) {
     reply: () => new Promise(() => {}),
     audioIssue: () => null,
     imageIssue: () => null,
-    now: () => performance.now(),
     ...options,
   });
   await controller.loadChats();

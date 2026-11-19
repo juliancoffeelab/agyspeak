@@ -1,6 +1,6 @@
 ---
 name: agent-failure
-description: Diagnose the cause of an agent failure when the user asks why its behavior or output went wrong.
+description: Use when an agent's work went wrong (misread task, broken or wrong output, repeated mistake) and the user asks why, or asks what to change in the code or instructions so that kind of agent failure doesn't recur. Investigates and reports; does not edit.
 ---
 
 # Garden investigation

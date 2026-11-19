@@ -35,7 +35,6 @@ type RunnerPorts = {
     replyId: number,
     outcome: TerminalOutcome,
   ) => Promise<ChatUpdate | null>;
-  now: () => number;
   onStart: (run: PendingReply) => void;
   onSettled: (run: PendingReply, update: ChatUpdate | null) => void;
   onUnsaved: (unsaved: UnsavedReply) => void;
@@ -89,7 +88,7 @@ export function createReplyRunner(ports: RunnerPorts) {
       run.stream.close();
       const elapsedMillis = Math.max(
         0,
-        Math.round(ports.now() - run.startedAt),
+        Math.round(performance.now() - run.startedAt),
       );
       await save(run, { status, text, error, model, elapsedMillis });
     })();
@@ -146,7 +145,7 @@ export function createReplyRunner(ports: RunnerPorts) {
     admit(chatId: string): Admission | null {
       if (reserved.has(chatId) || active.has(chatId)) return null;
       reserved.add(chatId);
-      const startedAt = ports.now();
+      const startedAt = performance.now();
       let used = false;
       return {
         release() {

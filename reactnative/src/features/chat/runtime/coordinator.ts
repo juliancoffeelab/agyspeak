@@ -68,7 +68,6 @@ export type ChatCoordinatorOptions = {
   audioIssue: (model: string) => string | null;
   imageIssue: (model: string) => string | null;
   // Milliseconds on a monotonic clock, for reply timing.
-  now: () => number;
 };
 
 // Orders what crosses the draft, the reply runner and the repository, and
@@ -96,7 +95,6 @@ export class ChatCoordinator {
     settings,
     audioIssue,
     imageIssue,
-    now,
   }: ChatCoordinatorOptions) {
     this.store = store;
     this.audioIssue = audioIssue;
@@ -107,7 +105,6 @@ export class ChatCoordinator {
       contextIssue: (messages, model) => this.contextIssue(messages, model),
       reply,
       finish: (replyId, outcome) => store.finishReply(replyId, outcome),
-      now,
       onStart: (run) =>
         this.publish({ pending: [...this.current.pending, run] }),
       onSettled: (run, update) => {

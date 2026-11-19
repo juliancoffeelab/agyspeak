@@ -6,6 +6,7 @@ import {
   latestId,
   readLatest,
 } from "./sqlite-helper.mjs";
+import { StreamingText } from "../src/features/chat/runtime/StreamingText.ts";
 
 let settings = { apiKey: "sk-or-v1-dummy-never-sent", model: "test/model" };
 // Runs one call with changed settings; they are read as the call starts.
@@ -320,13 +321,22 @@ test("stream updates only the reply store; Stop persists partial text and ignore
   const request = deferred(),
     started = deferred();
   let update;
-  const { controller, store, sqlite } = await setup(
-    (_messages, _settings, _signal, onText) => {
+  // The frames the reply store asked for, run by hand.
+  const frames = [];
+  const requestFrame = globalThis.requestAnimationFrame;
+  globalThis.requestAnimationFrame = (run) => frames.push(run);
+  const { store, sqlite } = connect();
+  await store.initialize();
+  const controller = await coordinator({
+    store,
+    openAt: await latestId(store),
+    reply: (_messages, _settings, _signal, onText) => {
       update = onText;
       started.resolve();
       return request.promise;
     },
-  );
+    settings: () => settings,
+  });
   try {
     await controller.send("Stream", []);
     await started.promise;
@@ -338,7 +348,7 @@ test("stream updates only the reply store; Stop persists partial text and ignore
     });
     update("First");
     update("First second");
-    update("First second third");
+    update("First second\n| third");
     assert.equal(
       controller.state.getState(),
       snapshot,
@@ -349,13 +359,27 @@ test("stream updates only the reply store; Stop persists partial text and ignore
       "",
       "chunks never write SQLite",
     );
-    await new Promise((resolve) => setTimeout(resolve, 55));
-    assert.equal(stream.getSnapshot(), "First second third");
-    assert.equal(notifications, 1, "rapid chunks are coalesced");
+    assert.equal(frames.length, 1, "rapid chunks share one frame");
+    assert.equal(notifications, 0, "nothing is shown between frames");
+    frames.shift()();
+    assert.equal(notifications, 1, "a frame shows the words that are whole");
+    assert.equal(
+      stream.getSnapshot(),
+      "First second\n",
+      "an unfinished table row waits for its end",
+    );
+    update("First second\n| third |\nfour");
+    frames.shift()();
+    assert.equal(
+      stream.getSnapshot(),
+      "First second\n| third |\n",
+      "an unfinished word waits for its end",
+    );
     await controller.stop();
+    assert.equal(notifications, 3, "the end shows the rest");
     const saved = (await readLatest(store)).messages.at(-1);
     assert.equal(saved.status, "cancelled");
-    assert.equal(saved.text, "First second third");
+    assert.equal(saved.text, "First second\n| third |\nfour");
     update("Late chunk");
     request.resolve({
       text: "Late completion",
@@ -368,6 +392,7 @@ test("stream updates only the reply store; Stop persists partial text and ignore
     assert.equal(stream.getSnapshot(), saved.text);
     unsubscribe();
   } finally {
+    globalThis.requestAnimationFrame = requestFrame;
     await controller.dispose();
     sqlite.close();
   }
@@ -539,5 +564,39 @@ test("retrying the latest finished reply replaces it in the same row", async () 
   } finally {
     await controller.dispose();
     sqlite.close();
+  }
+});
+
+test("a reply without spaces between words, or with a very long word, is still shown as it arrives", () => {
+  const frames = [];
+  const requestFrame = globalThis.requestAnimationFrame;
+  globalThis.requestAnimationFrame = (run) => frames.push(run);
+  // What the store shows after `text` has arrived and a frame has run.
+  const shownAfter = (stream, text) => {
+    stream.update(text);
+    frames.shift()();
+    return stream.getSnapshot();
+  };
+  try {
+    const japanese = new StreamingText();
+    assert.equal(shownAfter(japanese, "洗濯機を止め"), "洗濯機を止め");
+    assert.equal(
+      shownAfter(japanese, "洗濯機を止めるには、ボタンを"),
+      "洗濯機を止めるには、ボタンを",
+    );
+    const address = "https://example.com/" + "a".repeat(100);
+    const long = new StreamingText();
+    assert.equal(shownAfter(long, "See " + address.slice(0, 30)), "See ");
+    assert.equal(shownAfter(long, "See " + address), "See " + address);
+    assert.equal(
+      shownAfter(long, "See " + address + "\n" + "😀".repeat(20) + "\ud83d"),
+      "See " + address + "\n" + "😀".repeat(20),
+      "a cut never splits a character",
+    );
+    const started = performance.now();
+    shownAfter(new StreamingText(), "x".repeat(200_000) + " y");
+    assert.ok(performance.now() - started < 100, "a long word costs no more");
+  } finally {
+    globalThis.requestAnimationFrame = requestFrame;
   }
 });

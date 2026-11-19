@@ -8,12 +8,9 @@ import { MarkdownMessage } from "./MarkdownMessage";
 import { AudioMessage } from "./AudioWaveform";
 import { useChatModel, useChatScope, useChatState } from "./chatContext";
 import { inputIssue } from "./runtime/capability";
+import type { StreamingText } from "./runtime/StreamingText";
 import type { PhotoReference } from "./storage/contracts";
-import {
-  openReply,
-  REPLY_UNSAVED,
-  type PendingReply,
-} from "./runtime/coordinator";
+import { openReply, REPLY_UNSAVED } from "./runtime/coordinator";
 import { useDockedList } from "../../ui/Screen";
 import { notify } from "../../ui/notice";
 import { useColors } from "../../ui/theme";
@@ -111,6 +108,7 @@ export function Conversation({
             (reply) => reply.messageId === item.id,
           );
           const latest = item.id === history.messages.at(-1)?.id;
+          const writing = pending?.messageId === item.id;
           return (
             <View
               style={[
@@ -151,14 +149,14 @@ export function Conversation({
                 ))}
                 {item.photos?.length && !item.text ? null : item.audio ? (
                   <AudioMessage audio={item.audio} />
-                ) : pending?.messageId === item.id ? (
-                  <StreamingReply pending={pending} />
+                ) : writing ? (
+                  <ReplyText stream={pending.stream} text="" />
                 ) : unsaved?.outcome.text ? (
-                  <MarkdownMessage text={unsaved.outcome.text} />
+                  <ReplyText stream={null} text={unsaved.outcome.text} />
                 ) : item.role === "assistant" &&
                   item.status !== "pending" &&
                   item.text ? (
-                  <MarkdownMessage text={item.text} />
+                  <ReplyText stream={null} text={item.text} />
                 ) : (
                   <Text
                     selectable
@@ -175,14 +173,15 @@ export function Conversation({
                   </Text>
                 )}
                 {item.role === "assistant" &&
-                  item.status !== "pending" &&
-                  item.text.trim() && (
+                  (writing ||
+                    (item.status !== "pending" && item.text.trim())) && (
                     <ResponseActions
                       id={item.id}
                       markdown={item.text}
                       elapsedMillis={item.elapsedMillis}
+                      writing={writing}
                       retry={
-                        latest
+                        latest && !writing
                           ? {
                               disabled: busy || recording,
                               issue: retryIssue,
@@ -244,17 +243,31 @@ export function Conversation({
   );
 }
 
-function StreamingReply({ pending }: { pending: PendingReply }) {
+const noStream = () => () => undefined;
+
+// A reply's text, from its stream while it is being written and from the
+// saved message afterwards. One component shows both in one Markdown view,
+// so that finishing a reply changes nothing on screen.
+function ReplyText({
+  stream,
+  text,
+}: {
+  stream: StreamingText | null;
+  text: string;
+}) {
   const colors = useColors();
-  const text = useSyncExternalStore(
-    pending.stream.subscribe,
-    pending.stream.getSnapshot,
+  const streamed = useSyncExternalStore(
+    stream ? stream.subscribe : noStream,
+    () => (stream ? stream.getSnapshot() : null),
   );
-  return (
-    <Text selectable style={[styles.messageText, { color: colors.text }]}>
-      {text || "Thinking…"}
-    </Text>
-  );
+  const shown = streamed ?? text;
+  if (!shown)
+    return (
+      <Text selectable style={[styles.messageText, { color: colors.text }]}>
+        Thinking…
+      </Text>
+    );
+  return <MarkdownMessage text={shown} writing={stream !== null} />;
 }
 
 function MessageSeparator() {
