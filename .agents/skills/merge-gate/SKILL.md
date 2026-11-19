@@ -23,7 +23,7 @@ authorization does not require a redundant review or indiscriminate squashing.
 
 Identify the PR head and inspect existing review/check results, the changed-file
 list and commit history. Reuse evidence for unchanged content; assess whether
-later changes invalidate its coverage. Check these five conditions:
+later changes invalidate its coverage. Check these six conditions:
 
 - **Independent review:** cite a reviewer other than the implementer, reviewed
   revision/scope and the resolution or evidenced disposition of findings. The
@@ -47,6 +47,10 @@ later changes invalidate its coverage. Check these five conditions:
   results and tested revision, distinguishing reused evidence from fresh checks.
   Reliable local results count without CI. Documentation-only changes need
   relevant checks.
+- **Migrations:** a change under `reactnative/src/migrations/history` passes
+  the merge check of `save-migrations` (one added version module at most,
+  frozen modules untouched); cite the diff against the base branch. Say “none” when
+  that directory is unchanged.
 
 Missing or stale requirements, scope, simplicity or history assessments remain
 unverified; producing them belongs to review, not this audit. Bound quick probes
@@ -59,9 +63,9 @@ identified head, or the time budget is reached.
 
 ## Return the verdict
 
-Identify the head and report the five items once, each marked ✅ supported,
+Identify the head and report the six items once, each marked ✅ supported,
 ❌ failed or ❓ unverified with concise evidence. Reference existing assessments
-rather than reproducing their reports. Report **ready** only when all five are ✅;
+rather than reproducing their reports. Report **ready** only when all six are ✅;
 otherwise report **not ready** and the next action for each gap. Keep the verdict
 in the response or PR metadata, without a tracked gate report file.
 

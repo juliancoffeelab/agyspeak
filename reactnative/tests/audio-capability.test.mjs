@@ -1,9 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { audioInputIssue } from "../src/chat/audioCapability.ts";
-import { contextHasAudio } from "../src/chat/context.ts";
-import { ChatController } from "../src/chat/ChatController.ts";
-import { connect } from "./sqlite-helper.mjs";
+import {
+  audioInputIssue,
+  inputIssue,
+} from "../src/features/chat/runtime/capability.ts";
+import {
+  connect,
+  coordinator,
+  latestId,
+  readLatest,
+} from "./sqlite-helper.mjs";
 
 const models = [
   {
@@ -21,7 +27,18 @@ const models = [
     outputPrice: null,
   },
 ];
-const settings = { apiKey: "fake-never-sent", model: "text" };
+let settings = { apiKey: "fake-never-sent", model: "text" };
+// Runs one call with changed settings; they are read as the call starts.
+function withSettings(change, call) {
+  const before = settings;
+  settings = { ...settings, ...change };
+  try {
+    return call();
+  } finally {
+    settings = before;
+  }
+}
+
 const recording = { data: "UklGRg==", format: "wav" };
 
 test("audio capability distinguishes supported, unsupported, and unknown models", () => {
@@ -42,54 +59,66 @@ test("audio eligibility matches bounded context, including the prospective text"
     audio: { encodedLength: 8 },
   };
   const text = { role: "user", text: "a".repeat(23_000), status: "complete" };
-  assert.equal(contextHasAudio([audio], "hello"), true);
-  assert.equal(contextHasAudio([audio, text], "a".repeat(500)), true);
-  assert.equal(contextHasAudio([audio, text], "a".repeat(1_100)), false);
-  assert.equal(contextHasAudio([{ ...text, text: "plain" }], "hello"), false);
+  const needsAudio = (messages, draft) =>
+    inputIssue(
+      messages,
+      { kind: "text", text: draft, photos: [] },
+      { audio: "no audio", image: null },
+    ) === "no audio";
+  assert.equal(needsAudio([audio], "hello"), true);
+  assert.equal(needsAudio([audio, text], "a".repeat(500)), true);
+  assert.equal(needsAudio([audio, text], "a".repeat(1_100)), false);
+  assert.equal(needsAudio([{ ...text, text: "plain" }], "hello"), false);
 });
 
 test("unsupported text/audio sends and retries are blocked before changing saved messages or draft", async () => {
   const { store, sqlite } = connect();
   await store.initialize();
+  await store.seedChat("chat");
   const pending = await store.beginReply(
     "chat",
-    "Voice message",
+    { kind: "audio", audio: recording },
     "audio",
     1,
-    recording,
   );
-  const replyId = pending.messages.at(-1).id;
-  await store.finishReply(replyId, "failed", "", "test failure");
+  const replyId = pending.replyId;
+  await store.finishReply(replyId, {
+    status: "failed",
+    text: "",
+    error: "test failure",
+    model: null,
+    elapsedMillis: null,
+  });
   let requests = 0;
-  const controller = new ChatController(
+  const controller = await coordinator({
     store,
-    await store.read(),
-    () => {
+    openAt: await latestId(store),
+    reply: () => {
       requests++;
       return new Promise(() => {});
     },
-    () => "unused",
-    "",
-    (model) => audioInputIssue(model, models),
-    () => null,
-  );
+    audioIssue: (model) => audioInputIssue(model, models),
+    settings: () => settings,
+  });
   try {
-    const draft = controller.getSnapshot().draft;
+    const draft = controller.state.getState().draft;
     draft.edit("Keep this draft");
     await controller.flushDraft();
     await controller.chooseModel("text");
-    const before = await store.read();
-    assert.equal(await controller.send("Follow-up", settings), false);
-    assert.equal(await controller.sendAudio(recording, settings), false);
-    assert.equal(await controller.retryReply(replyId, settings), false);
+    const before = await readLatest(store);
+    assert.equal(await controller.send("Follow-up", []), false);
+    assert.equal(await controller.sendAudio(recording), false);
+    assert.equal(await controller.retryReply(replyId), false);
     assert.equal(requests, 0);
-    assert.deepEqual(await store.read(), before);
+    assert.deepEqual(await readLatest(store), before);
     assert.equal(draft.value.text, "Keep this draft");
     assert.equal(await store.readDraft("chat"), "Keep this draft");
-    assert.match(controller.getSnapshot().error, /doesn’t support audio/);
+    assert.match(controller.state.getState().error, /doesn’t support audio/);
     await controller.chooseModel("audio");
     assert.equal(
-      await controller.retryReply(replyId, { ...settings, model: "audio" }),
+      await withSettings({ model: "audio" }, () =>
+        controller.retryReply(replyId),
+      ),
       true,
     );
     await new Promise((resolve) => setImmediate(resolve));
@@ -104,20 +133,18 @@ test("a text model can still send plain text in a conversation without audio", a
   const { store, sqlite } = connect();
   await store.initialize();
   let requests = 0;
-  const controller = new ChatController(
+  const controller = await coordinator({
     store,
-    await store.read(),
-    async () => {
+    openAt: await latestId(store),
+    reply: async () => {
       requests++;
-      return { text: "Reply", model: "text", cost: 0 };
+      return { text: "Reply", model: "text", cost: 0, stopped: null };
     },
-    () => "text-chat",
-    "",
-    (model) => audioInputIssue(model, models),
-    () => null,
-  );
+    audioIssue: (model) => audioInputIssue(model, models),
+    settings: () => settings,
+  });
   try {
-    assert.equal(await controller.send("Hello", settings), true);
+    assert.equal(await controller.send("Hello", []), true);
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(requests, 1);
   } finally {
@@ -131,33 +158,33 @@ test("the final context is checked again before starting inference", async () =>
   await store.initialize();
   let allowed = true,
     requests = 0;
-  const controller = new ChatController(
+  const controller = await coordinator({
     store,
-    await store.read(),
-    async () => {
+    openAt: await latestId(store),
+    reply: async () => {
       requests++;
-      return { text: "Unexpected", model: "audio", cost: 0 };
+      return { text: "Unexpected", model: "audio", cost: 0, stopped: null };
     },
-    () => "changed",
-    "",
-    () => (allowed ? null : "Audio unavailable"),
-    () => null,
-  );
+    audioIssue: () => (allowed ? null : "Audio unavailable"),
+    settings: () => settings,
+  });
   try {
     assert.equal(
-      await controller.sendAudio(recording, { ...settings, model: "audio" }),
+      await withSettings({ model: "audio" }, () =>
+        controller.sendAudio(recording),
+      ),
       true,
     );
     allowed = false;
-    for (let i = 0; i < 10 && controller.getSnapshot().pending; i++)
+    for (let i = 0; i < 10 && controller.state.getState().pending.length; i++)
       await new Promise((resolve) => setImmediate(resolve));
     assert.equal(requests, 0);
     assert.equal(
-      controller.getSnapshot().history.messages.at(-1).status,
+      controller.state.getState().history.messages.at(-1).status,
       "failed",
     );
     assert.match(
-      controller.getSnapshot().history.messages.at(-1).error,
+      controller.state.getState().history.messages.at(-1).error,
       /Audio unavailable/,
     );
   } finally {

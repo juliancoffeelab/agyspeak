@@ -14,3 +14,8 @@ wheels/
 
 # Local notes
 /findings.md
+
+# Claude Code: only the shared skills link is tracked; local settings,
+# permissions and session files stay on this machine.
+/.claude/*
+!/.claude/skills

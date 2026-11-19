@@ -4,12 +4,14 @@ import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import {
   parseModels,
   RouterAuthenticationError,
-} from "../src/chat/routerMetadata.ts";
+} from "../src/providers/openrouter/metadata.ts";
+import { createOpenRouterConnection } from "../src/connections/openrouter.ts";
 import {
+  discardUsage,
   modelCatalogQuery,
   routerUsageQuery,
   usagePresentation,
-} from "../src/chat/routerQueries.ts";
+} from "../src/providers/openrouter/queries.ts";
 
 const catalog = {
   data: [
@@ -24,6 +26,8 @@ const catalog = {
 const usage = (value) => ({
   data: { usage_daily: value, usage_monthly: value, limit_remaining: 5 },
 });
+const first = { apiKey: "sk-or-1111111111111111", lifetime: 1, revision: 0 };
+const second = { apiKey: "sk-or-2222222222222222", lifetime: 1, revision: 1 };
 const reply = (data) => ({ ok: true, json: async () => data });
 
 test("catalog loads from disk, refreshes explicitly, and retains data if refresh fails", async () => {
@@ -68,7 +72,7 @@ test("catalog loads from disk, refreshes explicitly, and retains data if refresh
 test("spending remains cached during refresh and failed refresh; different keys stay isolated", async () => {
   const client = new QueryClient();
   let fail = false;
-  const options = routerUsageQuery("sk-or-1111111111111111", async (url) => {
+  const options = routerUsageQuery(first, async (url) => {
     if (fail) throw new Error("offline");
     return url.endsWith("/credits")
       ? { ok: false, status: 403 }
@@ -87,9 +91,7 @@ test("spending remains cached during refresh and failed refresh; different keys 
     );
     assert.equal(observer.getCurrentResult().data.daily, 1);
     assert.equal(observer.getCurrentResult().isError, true);
-    observer.setOptions(
-      routerUsageQuery("sk-or-2222222222222222", async () => reply(usage(2))),
-    );
+    observer.setOptions(routerUsageQuery(second, async () => reply(usage(2))));
     assert.equal(observer.getCurrentResult().data, undefined);
     await observer.refetch();
     assert.equal(observer.getCurrentResult().data.daily, 2);
@@ -101,7 +103,7 @@ test("spending remains cached during refresh and failed refresh; different keys 
   }
 });
 
-test("spending ignores empty or malformed saved keys; a valid saved key enables checks", async () => {
+test("spending stays idle while disconnected and never puts the key in its cache key", async () => {
   const client = new QueryClient();
   let requests = 0;
   const fetcher = async () => {
@@ -111,16 +113,15 @@ test("spending ignores empty or malformed saved keys; a valid saved key enables 
   const observer = new QueryObserver(client, routerUsageQuery(null, fetcher));
   const unsubscribe = observer.subscribe(() => {});
   try {
-    for (const input of [null, "", " ", "not-a-key"]) {
-      observer.setOptions(routerUsageQuery(input, fetcher));
-      await new Promise((resolve) => setImmediate(resolve));
-      assert.equal(observer.getCurrentResult().fetchStatus, "idle");
-    }
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(observer.getCurrentResult().fetchStatus, "idle");
     assert.equal(requests, 0);
-    observer.setOptions(routerUsageQuery("sk-or-1111111111111111", fetcher));
+    observer.setOptions(routerUsageQuery(first, fetcher));
     await observer.refetch();
     assert.equal(requests, 2);
     assert.equal(observer.getCurrentResult().data.daily, 1);
+    for (const query of client.getQueryCache().getAll())
+      assert.equal(JSON.stringify(query.queryKey).includes("sk-or-"), false);
     observer.setOptions(routerUsageQuery(null, fetcher));
     assert.equal(observer.getCurrentResult().data, undefined);
     assert.equal(observer.getCurrentResult().fetchStatus, "idle");
@@ -135,8 +136,7 @@ test("spending ignores empty or malformed saved keys; a valid saved key enables 
 test("authentication failure overrides cached stats; network failure preserves them", async () => {
   const client = new QueryClient();
   let status = 200;
-  const input = "sk-or-1111111111111111";
-  const options = routerUsageQuery(input, async (url) =>
+  const options = routerUsageQuery(first, async (url) =>
     url.endsWith("/credits")
       ? { ok: false, status: 403 }
       : status === 200
@@ -147,7 +147,7 @@ test("authentication failure overrides cached stats; network failure preserves t
   const unsubscribe = observer.subscribe(() => {});
   const presentation = () => {
     const q = observer.getCurrentResult();
-    return usagePresentation(input, true, q.data, q.error);
+    return usagePresentation(true, q.data, q.error);
   };
   try {
     await observer.refetch();
@@ -172,6 +172,55 @@ test("authentication failure overrides cached stats; network failure preserves t
   } finally {
     unsubscribe();
     observer.destroy();
+    client.clear();
+  }
+});
+
+test("a recreated connection owner never sees usage cached for an earlier key", async () => {
+  const client = new QueryClient();
+  let saved = first.apiKey;
+  const secure = {
+    get: async () => saved,
+    set: async (_, value) => {
+      saved = value;
+    },
+  };
+  const owners = [];
+  const requests = [];
+  const fetcher = async (url, init) => {
+    const key = init.headers.Authorization.slice(-4);
+    requests.push(key);
+    return reply(usage(key === "1111" ? 1 : 2));
+  };
+  const observe = async (owner) => {
+    const observer = new QueryObserver(
+      client,
+      routerUsageQuery(owner.capture(), fetcher),
+    );
+    const unsubscribe = observer.subscribe(() => {});
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    const daily = observer.getCurrentResult().data?.daily;
+    unsubscribe();
+    observer.destroy();
+    return daily;
+  };
+  try {
+    owners.push(createOpenRouterConnection(secure));
+    await owners[0].read();
+    assert.equal(await observe(owners[0]), 1);
+    await owners[0].save(second.apiKey);
+    discardUsage(client, owners[0].lifetime, 1);
+    assert.equal(client.getQueryCache().getAll().length, 0);
+    // A new scope reads the replacement key and starts again at revision 0.
+    owners.push(createOpenRouterConnection(secure));
+    await owners[1].read();
+    assert.equal(owners[1].capture().revision, 0);
+    assert.equal(await observe(owners[1]), 2);
+    assert.deepEqual(requests, ["1111", "1111", "2222", "2222"]);
+    discardUsage(client, owners[1].lifetime, null);
+    assert.equal(client.getQueryCache().getAll().length, 0);
+  } finally {
     client.clear();
   }
 });

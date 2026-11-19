@@ -10,6 +10,7 @@ import importX from "eslint-plugin-import-x";
 import { createTypeScriptImportResolver } from "eslint-import-resolver-typescript";
 import globals from "globals";
 import tseslint from "typescript-eslint";
+import { migrationBoundaryRule } from "./eslint-rules/migration-boundary.mjs";
 
 const rootDir = dirname(fileURLToPath(import.meta.url));
 
@@ -102,6 +103,21 @@ export default defineConfig([
             "JSXElement[openingElement.name.name=/^(View|ScrollView|Pressable|TouchableOpacity|TouchableHighlight|TouchableWithoutFeedback)$/] > JSXText[value=/\\S/]",
           message: "Wrap native container text in a Text component.",
         },
+      ],
+    },
+  },
+  {
+    // Every module the toolchain accepts. Frozen-fixture tests are the one
+    // exception: they may import individual historical steps.
+    files: ["**/*.{ts,tsx,js,jsx,mjs,cjs}"],
+    ignores: ["tests/**"],
+    plugins: {
+      local: { rules: { "migration-boundary": migrationBoundaryRule } },
+    },
+    rules: {
+      "local/migration-boundary": [
+        "error",
+        { root: rootDir, packages: ["zod"] },
       ],
     },
   },

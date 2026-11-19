@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { RecordingSession } from "../src/chat/RecordingSession.ts";
+import { RecordingSession } from "../src/device/recording/RecordingSession.ts";
+import { createAudioArbiter } from "../src/device/audio.ts";
 
 function deferred() {
   let resolve;
@@ -36,6 +37,7 @@ function setup(overrides = {}) {
     }),
     uri: () => "cache/recording.m4a",
     remove: (uri) => native.removed.push(uri),
+    audio: createAudioArbiter(),
     ...overrides,
   };
   return { native, session: new RecordingSession(port) };
@@ -203,4 +205,35 @@ test("navigation during native stop prevents the pending send", async () => {
   assert.equal(submissions, 0);
   assert.equal(session.getSnapshot().phase, "ready");
   await session.discard();
+});
+
+test("a replacement session waits for the replaced capture's native stop", async () => {
+  const audio = createAudioArbiter();
+  const entered = deferred(),
+    gate = deferred();
+  const old = setup({
+    audio,
+    stop: async () => {
+      entered.resolve();
+      await gate.promise;
+      old.native.recording = false;
+    },
+  });
+  await old.session.start();
+  // Switching chats remounts the composer: the old session is torn down.
+  old.session.setActive(false);
+  void old.session.discard();
+  await entered.promise;
+  let prepared = 0;
+  const next = setup({ audio, prepare: async () => void prepared++ });
+  const starting = next.session.start();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(prepared, 0, "the new capture waits for the old stop");
+  assert.equal(audio.holds(), true, "read-aloud stays blocked");
+  gate.resolve();
+  assert.equal(await starting, true);
+  assert.equal(prepared, 1);
+  assert.equal(next.session.getSnapshot().phase, "recording");
+  await next.session.discard();
+  assert.equal(audio.holds(), false);
 });

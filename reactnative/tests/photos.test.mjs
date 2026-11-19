@@ -1,38 +1,59 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { connect } from "./sqlite-helper.mjs";
-import { requestMessages, validatePhotos } from "../src/chat/openRouter.ts";
-import { contextHasPhotos, selectContext } from "../src/chat/context.ts";
-import { imageInputIssue } from "../src/chat/audioCapability.ts";
-import { parseModels } from "../src/chat/routerMetadata.ts";
-import { ChatController } from "../src/chat/ChatController.ts";
+import {
+  connect,
+  coordinator,
+  latestId,
+  readLatest,
+  savedChats,
+} from "./sqlite-helper.mjs";
+import { requestMessages } from "../src/providers/openrouter/transport.ts";
+import { validatePhotos } from "../src/features/chat/runtime/inputLimits.ts";
+import {
+  selectContext,
+  toProviderContext,
+} from "../src/features/chat/runtime/context.ts";
+import {
+  imageInputIssue,
+  inputIssue,
+} from "../src/features/chat/runtime/capability.ts";
+import { parseModels } from "../src/providers/openrouter/metadata.ts";
 
 const photo = { data: "/9j/", thumbnail: "/9j/", width: 100, height: 80 };
-const settings = { apiKey: "test-key", model: "text" };
+let settings = { apiKey: "test-key", model: "text" };
+// Runs one call with changed settings; they are read as the call starts.
+function withSettings(change, call) {
+  const before = settings;
+  settings = { ...settings, ...change };
+  try {
+    return call();
+  } finally {
+    settings = before;
+  }
+}
 
 test("photos and captions persist atomically, load lazily for requests, and are deleted with chat", async () => {
   const { store, sqlite, queries } = connect();
   try {
     await store.initialize();
-    await store.saveDraft(null, "caption");
+    const { id } = await store.readNewChat();
+    await store.saveDraft(id, "caption");
     const saved = await store.beginReply(
-      "photos",
-      "caption",
+      id,
+      { kind: "text", text: "caption", photos: [photo, photo] },
       "vision",
       1,
-      undefined,
-      [photo, photo],
     );
-    assert.equal(await store.readDraft("photos"), "");
-    assert.equal(saved.messages[0].photos.length, 2);
-    assert.equal(saved.messages[0].photos[0].data, undefined);
+    assert.equal(await store.readDraft(id), "");
+    assert.equal(saved.chat.messages[0].photos.length, 2);
+    assert.equal(saved.chat.messages[0].photos[0].data, undefined);
     assert.equal(
       queries.some((q) => /SELECT id, data FROM photos/.test(q.sql)),
       false,
     );
-    const context = await store.readContext("photos");
+    const context = await store.readContext(id);
     assert.deepEqual(context[0].photos, [photo, photo]);
-    assert.deepEqual(requestMessages(context), [
+    assert.deepEqual(requestMessages(toProviderContext(context)), [
       {
         role: "user",
         content: [
@@ -48,26 +69,8 @@ test("photos and captions persist atomically, load lazily for requests, and are 
         ],
       },
     ]);
-    await store.remove("photos");
+    await store.remove(id);
     assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM photos").get().n, 0);
-  } finally {
-    sqlite.close();
-  }
-});
-
-test("version-six upgrade preserves existing messages and drafts", async () => {
-  const { store, sqlite } = connect();
-  try {
-    await store.initialize();
-    await store.beginReply("old", "existing message", "text", 1);
-    await store.saveDraft("old", "existing draft");
-    sqlite.exec(
-      "ALTER TABLE messages DROP COLUMN elapsed_millis; ALTER TABLE chats DROP COLUMN selected_model; ALTER TABLE app_state DROP COLUMN draft_model; DROP TABLE draft_photos; DROP TABLE photos; PRAGMA user_version = 6",
-    );
-    await store.initialize();
-    assert.equal((await store.read()).messages[0].text, "existing message");
-    assert.equal(await store.readDraft("old"), "existing draft");
-    assert.equal(sqlite.prepare("PRAGMA user_version").get().user_version, 10);
   } finally {
     sqlite.close();
   }
@@ -77,14 +80,20 @@ test("photo storage rolls back together with a failed message snapshot", async (
   const { store, sqlite, failRead } = connect();
   try {
     await store.initialize();
-    await store.saveDraft(null, "keep me");
+    const { id } = await store.readNewChat();
+    await store.saveDraft(id, "keep me");
     failRead();
     await assert.rejects(
-      store.beginReply("failed", "caption", "vision", 1, undefined, [photo]),
+      store.beginReply(
+        id,
+        { kind: "text", text: "caption", photos: [photo] },
+        "vision",
+        1,
+      ),
     );
     assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM photos").get().n, 0);
-    assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM chats").get().n, 0);
-    assert.equal(await store.readDraft(null), "keep me");
+    assert.deepEqual(await savedChats(store), []);
+    assert.equal(await store.readDraft(id), "keep me");
   } finally {
     sqlite.close();
   }
@@ -92,8 +101,17 @@ test("photo storage rolls back together with a failed message snapshot", async (
 
 test("image-only turns are included and images share the bounded media budget", () => {
   const image = { role: "user", status: "complete", text: "", photos: [photo] };
-  assert.equal(contextHasPhotos([image], ""), true);
-  assert.equal(requestMessages([image])[0].content.length, 1);
+  const needsImages = (messages, draft) =>
+    inputIssue(
+      messages,
+      { kind: "text", text: draft, photos: [] },
+      { audio: null, image: "no images" },
+    ) === "no images";
+  assert.equal(needsImages([image], ""), true);
+  assert.equal(
+    requestMessages(toProviderContext([image]))[0].content.length,
+    1,
+  );
   const bigAudio = {
     role: "user",
     status: "complete",
@@ -102,7 +120,7 @@ test("image-only turns are included and images share the bounded media budget", 
   };
   assert.deepEqual(selectContext([bigAudio, image]), [image]);
   assert.equal(
-    contextHasPhotos(
+    needsImages(
       [image, { role: "user", status: "complete", text: "x".repeat(24000) }],
       "x",
     ),
@@ -148,34 +166,35 @@ test("catalog distinguishes image-capable models and unknown metadata", () => {
 test("unsupported photo sends and follow-ups preserve drafts without inference", async () => {
   const { store, sqlite } = connect();
   await store.initialize();
+  await store.saveDraft((await store.readNewChat()).id, "draft");
   let calls = 0;
-  const controller = new ChatController(
+  const controller = await coordinator({
     store,
-    await store.read(),
-    async () => {
+    openAt: await latestId(store),
+    reply: async () => {
       calls++;
-      return { text: "reply", model: "vision", cost: 0 };
+      return { text: "reply", model: "vision", cost: 0, stopped: null };
     },
-    () => "chat",
-    "draft",
-    () => null,
-    (model) => (model === "vision" ? null : "No image support"),
-  );
+    imageIssue: (model) => (model === "vision" ? null : "No image support"),
+    settings: () => settings,
+  });
   try {
-    const draft = controller.getSnapshot().draft;
-    assert.equal(await controller.send("caption", settings, [photo]), false);
-    assert.equal(controller.getSnapshot().history.messages.length, 0);
+    const draft = controller.state.getState().draft;
+    assert.equal(await controller.send("caption", [photo]), false);
+    assert.equal(controller.state.getState().history.messages.length, 0);
     assert.equal(draft.value.text, "draft");
     assert.equal(
-      await controller.send("", { ...settings, model: "vision" }, [photo]),
+      await withSettings({ model: "vision" }, () =>
+        controller.send("", [photo]),
+      ),
       true,
     );
     await new Promise((resolve) => setTimeout(resolve, 10));
     assert.equal(calls, 1);
     await controller.chooseModel("text");
-    assert.equal(await controller.send("follow-up", settings), false);
+    assert.equal(await controller.send("follow-up", []), false);
     assert.equal(calls, 1);
-    assert.equal(controller.getSnapshot().history.messages.length, 2);
+    assert.equal(controller.state.getState().history.messages.length, 2);
   } finally {
     await controller.dispose();
     sqlite.close();
@@ -185,42 +204,47 @@ test("unsupported photo sends and follow-ups preserve drafts without inference",
 test("photo retry keeps the original attachment and blocks incompatible models before mutation", async () => {
   const { store, sqlite } = connect();
   await store.initialize();
+  await store.seedChat("chat");
   const pending = await store.beginReply(
     "chat",
-    "caption",
+    { kind: "text", text: "caption", photos: [photo] },
     "vision",
     1,
-    undefined,
-    [photo],
   );
-  const replyId = pending.messages.at(-1).id;
-  await store.finishReply(replyId, "failed", "", "offline");
+  const replyId = pending.replyId;
+  await store.finishReply(replyId, {
+    status: "failed",
+    text: "",
+    error: "offline",
+    model: null,
+    elapsedMillis: null,
+  });
   let received;
-  const controller = new ChatController(
+  const controller = await coordinator({
     store,
-    await store.read(),
-    async (messages) => {
+    openAt: await latestId(store),
+    reply: async (messages) => {
       received = messages;
-      return { text: "ok", model: "vision", cost: 0 };
+      return { text: "ok", model: "vision", cost: 0, stopped: null };
     },
-    () => "unused",
-    "",
-    () => null,
-    (model) => (model === "vision" ? null : "No image support"),
-  );
+    imageIssue: (model) => (model === "vision" ? null : "No image support"),
+    settings: () => settings,
+  });
   try {
     await controller.chooseModel("text");
-    assert.equal(await controller.retryReply(replyId, settings), false);
-    assert.equal((await store.read()).messages.at(-1).status, "failed");
+    assert.equal(await controller.retryReply(replyId), false);
+    assert.equal((await readLatest(store)).messages.at(-1).status, "failed");
     assert.equal(received, undefined);
     await controller.chooseModel("vision");
     assert.equal(
-      await controller.retryReply(replyId, { ...settings, model: "vision" }),
+      await withSettings({ model: "vision" }, () =>
+        controller.retryReply(replyId),
+      ),
       true,
     );
     await new Promise((resolve) => setTimeout(resolve, 10));
-    assert.deepEqual(received[0].photos, [photo]);
-    assert.equal((await store.read()).messages.length, 2);
+    assert.deepEqual(received[0].photos, [{ data: photo.data }]);
+    assert.equal((await readLatest(store)).messages.length, 2);
   } finally {
     await controller.dispose();
     sqlite.close();
@@ -232,27 +256,27 @@ test("actual image context is checked again before calling inference", async () 
   await store.initialize();
   let allowed = true,
     calls = 0;
-  const controller = new ChatController(
+  const controller = await coordinator({
     store,
-    await store.read(),
-    async () => {
+    openAt: await latestId(store),
+    reply: async () => {
       calls++;
-      return { text: "unexpected", model: "vision", cost: 0 };
+      return { text: "unexpected", model: "vision", cost: 0, stopped: null };
     },
-    () => "race",
-    "",
-    () => null,
-    () => (allowed ? null : "Images unavailable"),
-  );
+    imageIssue: () => (allowed ? null : "Images unavailable"),
+    settings: () => settings,
+  });
   try {
     assert.equal(
-      await controller.send("", { ...settings, model: "vision" }, [photo]),
+      await withSettings({ model: "vision" }, () =>
+        controller.send("", [photo]),
+      ),
       true,
     );
     allowed = false;
     await new Promise((resolve) => setTimeout(resolve, 10));
     assert.equal(calls, 0);
-    const saved = await store.read();
+    const saved = await readLatest(store);
     assert.equal(saved.messages.at(-1).status, "failed");
     assert.equal(saved.messages[0].photos.length, 1);
   } finally {
@@ -269,41 +293,51 @@ test("photo drafts survive reopening, remain isolated per chat, and consume with
   let connection = connect(join(dir, "drafts.db"));
   try {
     await connection.store.initialize();
-    await connection.store.saveDraft(null, "caption");
-    const metadata = await connection.store.addPhotoDraft(null, [photo]);
+    const { id } = await connection.store.readNewChat();
+    await connection.store.saveDraft(id, "caption");
+    const metadata = await connection.store.addPhotoDraft(id, [photo]);
     assert.equal(metadata[0].data, undefined);
     connection.sqlite.close();
     connection = connect(join(dir, "drafts.db"));
     const { store } = connection;
     await store.initialize();
-    assert.equal(await store.readDraft(null), "caption");
-    assert.deepEqual(await store.readPhotoDraftData(null), [photo]);
-    await store.beginReply("other", "other chat", "vision", 1, {
-      data: "UklGRg==",
-      format: "wav",
+    assert.deepEqual(await store.readNewChat(), {
+      id,
+      selectedModel: null,
+      draft: { text: "caption", photos: metadata },
     });
-    assert.deepEqual(await store.readPhotoDraftData(null), []);
-    assert.deepEqual(await store.readPhotoDraftData("other"), [photo]);
-    await store.addPhotoDraft(null, [{ ...photo, width: 200 }]);
-    assert.equal((await store.readPhotoDraft(null))[0].width, 200);
-    assert.equal((await store.readPhotoDraft("other"))[0].width, 100);
+    assert.deepEqual(await store.readPhotoDraftData(id), [photo]);
+    // A voice message saves the chat and leaves its draft with it.
+    await store.beginReply(
+      id,
+      { kind: "audio", audio: { data: "UklGRg==", format: "wav" } },
+      "vision",
+      1,
+    );
+    assert.deepEqual(await store.readPhotoDraftData(id), [photo]);
+    // The next new chat starts empty and keeps its own photos.
+    const fresh = (await store.activateNew()).chat.id;
+    assert.notEqual(fresh, id);
+    assert.deepEqual(await store.readPhotoDraftData(fresh), []);
+    await store.addPhotoDraft(fresh, [{ ...photo, width: 200 }]);
+    assert.equal((await store.readPhotoDraft(fresh))[0].width, 200);
+    assert.equal((await store.readPhotoDraft(id))[0].width, 100);
     const saved = await store.beginReply(
-      "scratch",
-      "caption",
+      fresh,
+      {
+        kind: "text",
+        text: "caption",
+        photos: await store.readPhotoDraftData(fresh),
+      },
       "vision",
       2,
-      undefined,
-      await store.readPhotoDraftData(null),
     );
-    assert.equal(saved.messages[0].photos.length, 1);
-    assert.equal((await store.readPhotoDraft("scratch")).length, 0);
-    assert.equal((await store.readPhotoDraftData("other")).length, 1);
-    await store.remove("other");
-    assert.equal((await store.readPhotoDraft("other")).length, 0);
-    await assert.rejects(
-      store.addPhotoDraft("other", [photo]),
-      /no longer exists/,
-    );
+    assert.equal(saved.chat.messages[0].photos.length, 1);
+    assert.equal((await store.readPhotoDraft(fresh)).length, 0);
+    assert.equal((await store.readPhotoDraftData(id)).length, 1);
+    await store.remove(id);
+    assert.equal((await store.readPhotoDraft(id)).length, 0);
+    await assert.rejects(store.addPhotoDraft(id, [photo]), /no longer exists/);
   } finally {
     connection.sqlite.close();
     await rm(dir, { recursive: true, force: true });
@@ -314,24 +348,30 @@ test("draft photo add/remove and send roll back without losing attachments", asy
   const { store, sqlite, failRead } = connect();
   try {
     await store.initialize();
+    const { id } = await store.readNewChat();
     failRead();
-    await assert.rejects(store.addPhotoDraft(null, [photo]));
-    assert.equal((await store.readPhotoDraft(null)).length, 0);
-    const [saved] = await store.addPhotoDraft(null, [photo]);
+    await assert.rejects(store.addPhotoDraft(id, [photo]));
+    assert.equal((await store.readPhotoDraft(id)).length, 0);
+    const [saved] = await store.addPhotoDraft(id, [photo]);
     failRead();
-    await assert.rejects(store.removePhotoDraft(null, saved.id));
-    assert.equal((await store.readPhotoDraft(null)).length, 1);
+    await assert.rejects(store.removePhotoDraft(id, saved.id));
+    assert.equal((await store.readPhotoDraft(id)).length, 1);
     failRead();
     await assert.rejects(
-      store.beginReply("fail", "", "vision", 1, undefined, [photo]),
+      store.beginReply(
+        id,
+        { kind: "text", text: "", photos: [photo] },
+        "vision",
+        1,
+      ),
     );
-    assert.deepEqual(await store.readPhotoDraftData(null), [photo]);
+    assert.deepEqual(await store.readPhotoDraftData(id), [photo]);
     assert.deepEqual(
       await store.readPhoto({ id: saved.id, draft: true }),
       photo,
     );
-    await store.removePhotoDraft(null, saved.id);
-    assert.equal((await store.readPhotoDraft(null)).length, 0);
+    await store.removePhotoDraft(id, saved.id);
+    assert.equal((await store.readPhotoDraft(id)).length, 0);
   } finally {
     sqlite.close();
   }
@@ -340,29 +380,27 @@ test("draft photo add/remove and send roll back without losing attachments", asy
 test("controller restores photo draft metadata on chat switch without publishing history on attachment edits", async () => {
   const { store, sqlite } = connect();
   await store.initialize();
-  const controller = new ChatController(
+  const controller = await coordinator({
     store,
-    await store.read(),
-    () => new Promise(() => {}),
-    () => "chat",
-    "",
-    () => null,
-    () => null,
-  );
+    openAt: await latestId(store),
+    settings: () => settings,
+  });
   try {
-    const snapshot = controller.getSnapshot(),
+    const snapshot = controller.state.getState(),
       draft = snapshot.draft;
     await draft.addPhotos([photo]);
-    assert.equal(controller.getSnapshot(), snapshot);
+    assert.equal(controller.state.getState(), snapshot);
     assert.equal(draft.getPhotos().length, 1);
     await controller.select(null);
-    assert.equal(controller.getSnapshot().draft.getPhotos().length, 1);
-    const restored = controller.getSnapshot().draft;
+    assert.equal(controller.state.getState().draft.getPhotos().length, 1);
+    const restored = controller.state.getState().draft;
     const photos = await restored.readPhotos();
     assert.equal(
       await restored.submit(
         (text) =>
-          controller.send(text, { ...settings, model: "vision" }, photos),
+          withSettings({ model: "vision" }, () =>
+            controller.send(text, photos),
+          ),
         () => {},
         () => {},
         true,
@@ -371,7 +409,7 @@ test("controller restores photo draft metadata on chat switch without publishing
     );
     assert.equal(restored.getPhotos().length, 0);
     assert.equal((await store.readPhotoDraft("chat")).length, 0);
-    const message = controller.getSnapshot().history.messages[0];
+    const message = controller.state.getState().history.messages[0];
     assert.deepEqual(
       await controller.readPhoto({ id: message.photos[0].id, draft: false }),
       photo,
