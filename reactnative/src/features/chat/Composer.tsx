@@ -289,15 +289,16 @@ function DraftComposer({
         />
       )}
 
-      <AttachmentMenu
-        visible={menuOpen && active}
-        audioIssue={audioIssue}
-        imageIssue={imageIssue}
-        onClose={() => setMenuOpen(false)}
-        onChoose={(source) => {
-          void run(() => chooseAttachment(source));
-        }}
-      />
+      {menuOpen && active && (
+        <AttachmentMenu
+          audioIssue={audioIssue}
+          imageIssue={imageIssue}
+          onClose={() => setMenuOpen(false)}
+          onChoose={(source) => {
+            void run(() => chooseAttachment(source));
+          }}
+        />
+      )}
       {images.photos.length > 0 && (
         <ScrollView
           horizontal
@@ -348,10 +349,7 @@ function DraftComposer({
           disabled={blocked || pending}
           onPress={() => {
             if (hasAudio) void recording.discard();
-            else {
-              Keyboard.dismiss();
-              setMenuOpen(true);
-            }
+            else setMenuOpen(true);
           }}
           style={[
             styles.iconButton,

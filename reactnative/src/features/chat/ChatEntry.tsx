@@ -1,15 +1,8 @@
 import { useCallback, useState, type ReactNode } from "react";
-import {
-  BackHandler,
-  Keyboard,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-} from "react-native";
+import { BackHandler, Pressable, StyleSheet, Text, View } from "react-native";
 import { useFocusEffect, useIsFocused, useRouter } from "expo-router";
 
-import { ChatBody, ChatLayout } from "./ChatLayout";
+import { ChatBody, ChatLayout, ChatNotices } from "./ChatLayout";
 import { ComposerRegion } from "./Composer";
 import { OpenFailure } from "./OpenFailure";
 import {
@@ -17,6 +10,7 @@ import {
   useOpenChatModelName,
   useOpenChatState,
 } from "./chatContext";
+import { AboveDock } from "../../ui/Screen";
 import { useColors } from "../../ui/theme";
 import { screenStyles } from "../../ui/screenStyles";
 import type { PhotoReference } from "./storage/contracts";
@@ -76,45 +70,48 @@ export function ChatEntry({ status }: { status: ReactNode }) {
       modelSelector={{
         label: modelName,
         disabled: !ready || saving,
-        onPress: () => {
-          Keyboard.dismiss();
-          setChoosingModel(true);
-        },
+        onPress: () => setChoosingModel(true),
       }}
       newChatDisabled={!ready || saving || inNewChat}
       navigationDisabled={saving}
       onNewChat={() => open(null)}
       onOpenHistory={() => router.push("/history")}
       onOpenSettings={onOpenSettings}
+      dock={
+        <>
+          {ready && <ChatNotices onOpenSettings={onOpenSettings} />}
+          <ComposerRegion
+            ready={ready}
+            active={focused && !choosingModel}
+            onOpenPhoto={setPhoto}
+            onSent={() => setScrollRequest((value) => value + 1)}
+          />
+        </>
+      }
     >
-      <View style={styles.screen}>
-        {!ready ? (
+      {!ready ? (
+        <AboveDock>
           <View style={styles.status}>{status}</View>
-        ) : failure ? (
+        </AboveDock>
+      ) : failure ? (
+        <AboveDock>
           <OpenFailure
             error={failure.error}
             onRetry={() => open(failure.id)}
             onDismiss={() => commands.dismissError()}
           />
-        ) : (
-          <ChatBody
-            focused={focused}
-            choosingModel={choosingModel}
-            onCloseModel={() => setChoosingModel(false)}
-            photo={photo}
-            onOpenPhoto={setPhoto}
-            onClosePhoto={closePhoto}
-            scrollRequest={scrollRequest}
-            onOpenSettings={onOpenSettings}
-          />
-        )}
-      </View>
-      <ComposerRegion
-        ready={ready}
-        active={focused && !choosingModel}
-        onOpenPhoto={setPhoto}
-        onSent={() => setScrollRequest((value) => value + 1)}
-      />
+        </AboveDock>
+      ) : (
+        <ChatBody
+          focused={focused}
+          choosingModel={choosingModel}
+          onCloseModel={() => setChoosingModel(false)}
+          photo={photo}
+          onOpenPhoto={setPhoto}
+          onClosePhoto={closePhoto}
+          scrollRequest={scrollRequest}
+        />
+      )}
     </ChatLayout>
   );
 }
@@ -131,30 +128,34 @@ export function UnknownRoute() {
       onNewChat={() => {}}
       onOpenHistory={() => router.push("/history")}
       onOpenSettings={() => router.push("/settings")}
+      dock={
+        <ComposerRegion
+          ready={false}
+          active={false}
+          onOpenPhoto={() => {}}
+          onSent={() => {}}
+        />
+      }
     >
-      <View style={[styles.screen, styles.empty, styles.unknown]}>
-        <Text
-          accessibilityRole="alert"
-          style={[styles.emptyTitle, { color: colors.text }]}
-        >
-          This link isn’t valid.
-        </Text>
-        <Pressable
-          accessibilityRole="button"
-          onPress={() => router.replace("/")}
-          style={styles.action}
-        >
-          <Text style={[styles.actionText, { color: colors.text }]}>
-            Open chat
+      <AboveDock>
+        <View style={[styles.screen, styles.empty, styles.unknown]}>
+          <Text
+            accessibilityRole="alert"
+            style={[styles.emptyTitle, { color: colors.text }]}
+          >
+            This link isn’t valid.
           </Text>
-        </Pressable>
-      </View>
-      <ComposerRegion
-        ready={false}
-        active={false}
-        onOpenPhoto={() => {}}
-        onSent={() => {}}
-      />
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => router.replace("/")}
+            style={styles.action}
+          >
+            <Text style={[styles.actionText, { color: colors.text }]}>
+              Open chat
+            </Text>
+          </Pressable>
+        </View>
+      </AboveDock>
     </ChatLayout>
   );
 }

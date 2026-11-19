@@ -1,18 +1,16 @@
-import { useEffect, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import {
   Keyboard,
-  KeyboardAvoidingView,
-  Platform,
   ScrollView,
   TouchableWithoutFeedback,
+  View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
-import { useNavigation, useRouter } from "expo-router";
+import { useRouter } from "expo-router";
 import { ChatHeader } from "../../ui/ChatHeader";
+import { Screen } from "../../ui/Screen";
 import { DefaultModelSetting } from "./DefaultModelSetting";
 import { OpenRouterSection } from "./OpenRouterSection";
 import { SpeechLanguageSetting } from "./SpeechLanguageSetting";
-import { useKeyboardVisible } from "../../ui/useKeyboardVisible";
 import { settingsStyles as styles } from "../../ui/settingsStyles";
 import { useSettingsScope } from "./settingsContext";
 import { useColors } from "../../ui/theme";
@@ -22,26 +20,14 @@ import { useColors } from "../../ui/theme";
 export function SettingsScreen({ status }: { status: ReactNode }) {
   const scope = useSettingsScope();
   const router = useRouter();
-  const navigation = useNavigation();
   const colors = useColors();
-  useEffect(
-    () => navigation.addListener("blur", () => Keyboard.dismiss()),
-    [navigation],
-  );
-  const keyboardVisible = useKeyboardVisible();
   return (
-    <KeyboardAvoidingView
-      style={[styles.screen, { backgroundColor: colors.background }]}
-      behavior={Platform.OS === "ios" ? "padding" : "height"}
-    >
+    <Screen keyboard="pad" background={colors.background}>
       <TouchableWithoutFeedback
         onPress={() => Keyboard.dismiss()}
         accessible={false}
       >
-        <SafeAreaView
-          style={styles.screen}
-          edges={keyboardVisible ? ["top", "left", "right"] : undefined}
-        >
+        <View style={styles.screen}>
           <ChatHeader
             mode="settings"
             title="Settings"
@@ -62,8 +48,8 @@ export function SettingsScreen({ status }: { status: ReactNode }) {
               status
             )}
           </ScrollView>
-        </SafeAreaView>
+        </View>
       </TouchableWithoutFeedback>
-    </KeyboardAvoidingView>
+    </Screen>
   );
 }

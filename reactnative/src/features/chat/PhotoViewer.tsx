@@ -3,16 +3,17 @@ import { useQuery } from "@tanstack/react-query";
 import {
   ActivityIndicator,
   Animated,
-  Modal,
   PanResponder,
   Pressable,
   StyleSheet,
   View,
   type GestureResponderEvent,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 import X from "lucide-react-native/icons/x";
 import { Failure } from "../../ui/Failure";
+import { StatusBar } from "expo-status-bar";
+import { Overlay } from "../../ui/Overlay";
+import { Screen } from "../../ui/Screen";
 import { FixedColorsContext, palettes } from "../../ui/theme";
 import { PHOTO_PAN_SPEED, shouldDismissPhoto } from "./photoInteraction";
 import type { PhotoInput, PhotoReference } from "./storage/contracts";
@@ -34,8 +35,9 @@ export function PhotoViewer({
     retry: false,
   });
   return (
-    <Modal animationType="fade" onRequestClose={onClose}>
-      <SafeAreaView style={styles.screen}>
+    <Overlay placement="fill" closeLabel="Close photo" onClose={onClose}>
+      <Screen keyboard="pad" background="black">
+        <StatusBar style="light" />
         <View style={styles.header}>
           <Pressable
             accessibilityRole="button"
@@ -67,8 +69,8 @@ export function PhotoViewer({
             )}
           </View>
         )}
-      </SafeAreaView>
-    </Modal>
+      </Screen>
+    </Overlay>
   );
 }
 
@@ -324,7 +326,6 @@ function ZoomablePhoto({
   );
 }
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: "black" },
   header: {
     flexDirection: "row",
     alignItems: "center",

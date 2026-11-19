@@ -19,9 +19,10 @@ export function DefaultModelSetting({
   const catalog = useModelCatalog();
   const [choosing, setChoosing] = useState(false);
   const selected = catalog.models.find((item) => item.id === model);
+  // Empty until the catalogue is read, and for a model it doesn't list.
   const summary = selected
     ? `${selected.name}${selected.image ? " · Photos" : ""}${selected.audio ? " · Audio" : ""}`
-    : null;
+    : "";
   return (
     <View style={styles.section}>
       <Text style={[styles.label, { color: colors.text }]}>Default model</Text>
@@ -33,9 +34,10 @@ export function DefaultModelSetting({
       >
         <Text style={[styles.choiceText, { color: colors.text }]}>{model}</Text>
       </Pressable>
-      {summary !== null && (
-        <Text style={[styles.hint, { color: colors.muted }]}>{summary}</Text>
-      )}
+      {/* Always one line, so that reading the catalogue moves nothing. */}
+      <Text numberOfLines={1} style={[styles.hint, { color: colors.muted }]}>
+        {summary}
+      </Text>
       {!selected && catalog.error !== null && (
         <Failure
           message={catalog.error}

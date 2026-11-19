@@ -3,9 +3,6 @@ import { useQuery } from "@tanstack/react-query";
 import {
   ActivityIndicator,
   FlatList,
-  KeyboardAvoidingView,
-  Modal,
-  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -21,6 +18,7 @@ import {
   createSpeechLanguageSearch,
 } from "../device/speech/language";
 import { Failure } from "./Failure";
+import { Overlay } from "./Overlay";
 import { useColors } from "./theme";
 
 // `unsetLabel` names what no selection means where the picker is used.
@@ -55,148 +53,122 @@ export function SpeechLanguagePicker({
     onClose();
   }
   return (
-    <Modal transparent animationType="fade" onRequestClose={onClose}>
-      <KeyboardAvoidingView
-        style={styles.overlay}
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
-      >
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Dismiss language picker"
-          onPress={onClose}
-          style={StyleSheet.absoluteFill}
+    <Overlay
+      placement="center"
+      closeLabel="Dismiss language picker"
+      onClose={onClose}
+    >
+      <View style={styles.card}>
+        <View style={styles.header}>
+          <Text style={[styles.title, { color: colors.text }]}>
+            Read-aloud language
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Refresh available languages"
+            disabled={voices.isFetching}
+            onPress={() => {
+              void voices.refetch();
+            }}
+            style={styles.icon}
+          >
+            {voices.isFetching ? (
+              <ActivityIndicator color={colors.muted} />
+            ) : (
+              <RefreshCw size={18} color={colors.muted} />
+            )}
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Close language picker"
+            onPress={onClose}
+            style={styles.icon}
+          >
+            <X size={22} color={colors.muted} />
+          </Pressable>
+        </View>
+        <TextInput
+          accessibilityLabel="Search speech languages"
+          placeholder="Search languages"
+          placeholderTextColor={colors.muted}
+          autoCapitalize="none"
+          autoCorrect={false}
+          value={search}
+          onChangeText={setSearch}
+          style={[
+            styles.search,
+            { color: colors.text, borderColor: colors.line },
+          ]}
         />
-        <View
-          accessibilityViewIsModal
-          onAccessibilityEscape={onClose}
-          style={[styles.card, { backgroundColor: colors.surface }]}
-        >
-          <View style={styles.header}>
-            <Text style={[styles.title, { color: colors.text }]}>
-              Read-aloud language
-            </Text>
+        {voices.isError && (
+          <Failure
+            message="Couldn’t load voices."
+            hint={null}
+            error={voices.error}
+            onRetry={() => void voices.refetch()}
+            onDismiss={null}
+          />
+        )}
+        <FlatList
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+          data={choices}
+          keyExtractor={(item) => item.code}
+          ListHeaderComponent={
             <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Refresh available languages"
-              disabled={voices.isFetching}
-              onPress={() => {
-                void voices.refetch();
-              }}
-              style={styles.icon}
+              accessibilityRole="radio"
+              accessibilityState={{ checked: selected === null }}
+              onPress={() => choose(null)}
+              style={styles.row}
             >
-              {voices.isFetching ? (
-                <ActivityIndicator color={colors.muted} />
-              ) : (
-                <RefreshCw size={18} color={colors.muted} />
+              <Text style={[styles.label, { color: colors.text }]}>
+                {unsetLabel}
+              </Text>
+              {selected === null && <Check size={20} color={colors.text} />}
+            </Pressable>
+          }
+          renderItem={({ item }) => (
+            <Pressable
+              accessibilityRole="radio"
+              accessibilityLabel={item.label}
+              accessibilityState={{ checked: selected === item.code }}
+              onPress={() => choose(item.code)}
+              style={[
+                styles.row,
+                {
+                  borderTopColor: colors.line,
+                  borderTopWidth: StyleSheet.hairlineWidth,
+                },
+              ]}
+            >
+              <View style={styles.name}>
+                <Text style={[styles.label, { color: colors.text }]}>
+                  {item.label}
+                </Text>
+                <Text style={[styles.code, { color: colors.muted }]}>
+                  {item.code}
+                </Text>
+              </View>
+              {selected === item.code && (
+                <Check size={20} color={colors.text} />
               )}
             </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Close language picker"
-              onPress={onClose}
-              style={styles.icon}
-            >
-              <X size={22} color={colors.muted} />
-            </Pressable>
-          </View>
-          <TextInput
-            accessibilityLabel="Search speech languages"
-            placeholder="Search languages"
-            placeholderTextColor={colors.muted}
-            autoCapitalize="none"
-            autoCorrect={false}
-            value={search}
-            onChangeText={setSearch}
-            style={[
-              styles.search,
-              { color: colors.text, borderColor: colors.line },
-            ]}
-          />
-          {voices.isError && (
-            <Failure
-              message="Couldn’t load voices."
-              hint={null}
-              error={voices.error}
-              onRetry={() => void voices.refetch()}
-              onDismiss={null}
-            />
           )}
-          <FlatList
-            keyboardShouldPersistTaps="handled"
-            keyboardDismissMode="on-drag"
-            data={choices}
-            keyExtractor={(item) => item.code}
-            ListHeaderComponent={
-              <Pressable
-                accessibilityRole="radio"
-                accessibilityState={{ checked: selected === null }}
-                onPress={() => choose(null)}
-                style={styles.row}
-              >
-                <Text style={[styles.label, { color: colors.text }]}>
-                  {unsetLabel}
-                </Text>
-                {selected === null && <Check size={20} color={colors.text} />}
-              </Pressable>
-            }
-            renderItem={({ item }) => (
-              <Pressable
-                accessibilityRole="radio"
-                accessibilityLabel={item.label}
-                accessibilityState={{ checked: selected === item.code }}
-                onPress={() => choose(item.code)}
-                style={[
-                  styles.row,
-                  {
-                    borderTopColor: colors.line,
-                    borderTopWidth: StyleSheet.hairlineWidth,
-                  },
-                ]}
-              >
-                <View style={styles.name}>
-                  <Text style={[styles.label, { color: colors.text }]}>
-                    {item.label}
-                  </Text>
-                  <Text style={[styles.code, { color: colors.muted }]}>
-                    {item.code}
-                  </Text>
-                </View>
-                {selected === item.code && (
-                  <Check size={20} color={colors.text} />
-                )}
-              </Pressable>
-            )}
-            ListEmptyComponent={
-              !voices.isFetching && !voices.isError ? (
-                <Text style={[styles.error, { color: colors.muted }]}>
-                  No matching languages.
-                </Text>
-              ) : undefined
-            }
-          />
-        </View>
-      </KeyboardAvoidingView>
-    </Modal>
+          ListEmptyComponent={
+            !voices.isFetching && !voices.isError ? (
+              <Text style={[styles.error, { color: colors.muted }]}>
+                No matching languages.
+              </Text>
+            ) : undefined
+          }
+        />
+      </View>
+    </Overlay>
   );
 }
 const styles = StyleSheet.create({
-  overlay: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    padding: 24,
-    backgroundColor: "rgba(0,0,0,0.4)",
-  },
-  card: {
-    width: "100%",
-    maxWidth: 400,
-    height: 460,
-    maxHeight: "85%",
-    borderRadius: 20,
-    paddingHorizontal: 16,
-    paddingBottom: 8,
-    overflow: "hidden",
-  },
+  // Its full height where there is room, less above the keyboard.
+  card: { height: 460, flexShrink: 1, paddingHorizontal: 16, paddingBottom: 8 },
   header: { flexDirection: "row", alignItems: "center", paddingVertical: 8 },
   title: { flex: 1, fontSize: 16, fontWeight: "600" },
   icon: {

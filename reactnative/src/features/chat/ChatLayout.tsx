@@ -1,15 +1,5 @@
 import type { ReactNode } from "react";
-import {
-  Keyboard,
-  KeyboardAvoidingView,
-  Platform,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-} from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
-import X from "lucide-react-native/icons/x";
+import { Keyboard, Pressable, StyleSheet, Text, View } from "react-native";
 
 import { Conversation } from "./Conversation";
 import { PhotoViewer } from "./PhotoViewer";
@@ -21,7 +11,8 @@ import { Failure } from "../../ui/Failure";
 import { ChatHeader } from "../../ui/ChatHeader";
 import { ModelPicker } from "../../ui/ModelPicker";
 import { useColors } from "../../ui/theme";
-import { useKeyboardVisible } from "../../ui/useKeyboardVisible";
+import { KeyboardDock, Screen } from "../../ui/Screen";
+import { Toast } from "../../ui/Toast";
 import { screenStyles } from "../../ui/screenStyles";
 
 type ChatNavigation = {
@@ -30,8 +21,8 @@ type ChatNavigation = {
   onOpenSettings: () => void;
 };
 
-// The open chat's conversation region: its messages, notices and the
-// pickers it opens. The layout and composer frame around it stay mounted.
+// The open chat's conversation region: its messages and what it opens over
+// them. The layout and composer frame around it stay mounted.
 export function ChatBody({
   focused,
   choosingModel,
@@ -40,7 +31,6 @@ export function ChatBody({
   onOpenPhoto,
   onClosePhoto,
   scrollRequest,
-  onOpenSettings,
 }: {
   focused: boolean;
   choosingModel: boolean;
@@ -49,13 +39,10 @@ export function ChatBody({
   onOpenPhoto: (reference: PhotoReference) => void;
   onClosePhoto: () => void;
   scrollRequest: number;
-  onOpenSettings: () => void;
 }) {
-  const colors = useColors();
-  const { chat: commands, connection } = useChatScope();
+  const { chat: commands } = useChatScope();
   const activeId = useChatState((state) => state.history.activeId);
   const error = useChatState((state) => state.error);
-  const key = useStore(connection.state);
   const model = useChatModel();
   useReplySpeech(focused && !choosingModel, activeId);
 
@@ -77,33 +64,30 @@ export function ChatBody({
         />
       )}
       {error !== null && (
-        <View
-          style={[
-            styles.toast,
-            { borderColor: colors.line, backgroundColor: colors.surface },
-          ]}
-        >
-          <Text
-            accessibilityRole="alert"
-            style={[styles.error, styles.toastText, { color: colors.text }]}
-          >
-            {error}
-          </Text>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Dismiss message"
-            onPress={() => commands.dismissError()}
-            style={styles.dismiss}
-          >
-            <X size={20} color={colors.muted} />
-          </Pressable>
-        </View>
+        <Toast message={error} onDismiss={() => commands.dismissError()} />
       )}
       <Conversation
         key={activeId}
         scrollRequest={scrollRequest}
         onOpenPhoto={onOpenPhoto}
       />
+    </>
+  );
+}
+
+// What stands between the open chat and sending: the saved key couldn't be
+// read, or there is none. Docked with the composer, so that it takes no room
+// from the conversation when it appears.
+export function ChatNotices({
+  onOpenSettings,
+}: {
+  onOpenSettings: () => void;
+}) {
+  const colors = useColors();
+  const { connection } = useChatScope();
+  const key = useStore(connection.state);
+  return (
+    <>
       {key.status === "failed" && (
         <View style={styles.keyFailure}>
           <Failure
@@ -130,8 +114,8 @@ export function ChatBody({
   );
 }
 
-// The one chat destination layout, from its first frame: the header, then
-// the conversation and composer regions in `children`.
+// The one chat destination layout, from its first frame: the header, the
+// conversation region in `children`, and `dock` over its bottom edge.
 export function ChatLayout({
   modelSelector,
   newChatDisabled,
@@ -139,6 +123,7 @@ export function ChatLayout({
   onNewChat,
   onOpenHistory,
   onOpenSettings,
+  dock,
   children,
 }: ChatNavigation & {
   modelSelector: {
@@ -148,40 +133,29 @@ export function ChatLayout({
   } | null;
   newChatDisabled: boolean;
   navigationDisabled: boolean;
+  dock: ReactNode;
   children: ReactNode;
 }) {
   const colors = useColors();
-  const keyboardVisible = useKeyboardVisible();
   return (
-    <KeyboardAvoidingView
-      style={[styles.screen, { backgroundColor: colors.background }]}
-      behavior={Platform.OS === "ios" ? "padding" : "height"}
-    >
-      <SafeAreaView
-        style={styles.screen}
-        edges={keyboardVisible ? ["top", "left", "right"] : undefined}
-      >
-        <ChatHeader
-          modelSelector={modelSelector}
-          mode="chat"
-          newChatDisabled={newChatDisabled}
-          navigationDisabled={navigationDisabled}
-          onNewChat={() => {
-            Keyboard.dismiss();
-            onNewChat();
-          }}
-          onNavigate={() => {
-            Keyboard.dismiss();
-            onOpenHistory();
-          }}
-          onSettings={() => {
-            Keyboard.dismiss();
-            onOpenSettings();
-          }}
-        />
+    <Screen keyboard="dock" background={colors.background}>
+      <ChatHeader
+        modelSelector={modelSelector}
+        mode="chat"
+        newChatDisabled={newChatDisabled}
+        navigationDisabled={navigationDisabled}
+        onNewChat={() => {
+          Keyboard.dismiss();
+          onNewChat();
+        }}
+        onNavigate={onOpenHistory}
+        onSettings={onOpenSettings}
+      />
+      <View style={styles.screen}>
         {children}
-      </SafeAreaView>
-    </KeyboardAvoidingView>
+        <KeyboardDock>{dock}</KeyboardDock>
+      </View>
+    </Screen>
   );
 }
 
@@ -190,24 +164,4 @@ const styles = StyleSheet.create({
   connect: { minHeight: 48, justifyContent: "center", paddingHorizontal: 20 },
   connectText: { fontSize: 14, fontWeight: "500" },
   keyFailure: { paddingHorizontal: 20, paddingVertical: 12 },
-  // Floats over the top of the conversation instead of moving it.
-  toast: {
-    position: "absolute",
-    top: 8,
-    left: 12,
-    right: 12,
-    zIndex: 1,
-    elevation: 3,
-    flexDirection: "row",
-    alignItems: "center",
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 12,
-  },
-  toastText: { flex: 1 },
-  dismiss: {
-    minHeight: 48,
-    minWidth: 48,
-    alignItems: "center",
-    justifyContent: "center",
-  },
 });

@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Image,
-  Modal,
   Pressable,
   StyleSheet,
   Text,
@@ -10,7 +9,9 @@ import {
   AppState,
 } from "react-native";
 import { CameraView, type CameraCapturedPicture } from "expo-camera";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { StatusBar } from "expo-status-bar";
+import { Overlay } from "../../ui/Overlay";
+import { Screen } from "../../ui/Screen";
 import X from "lucide-react-native/icons/x";
 import SwitchCamera from "lucide-react-native/icons/switch-camera";
 import { cameraPictureSize } from "./photoInteraction";
@@ -115,8 +116,9 @@ export function PhotoCamera({
     setError(null);
   }
   return (
-    <Modal animationType="fade" onRequestClose={onClose}>
-      <SafeAreaView style={styles.screen}>
+    <Overlay placement="fill" closeLabel="Close camera" onClose={onClose}>
+      <Screen keyboard="pad" background="black">
+        <StatusBar style="light" />
         <View style={styles.header}>
           <Pressable
             accessibilityRole="button"
@@ -220,12 +222,11 @@ export function PhotoCamera({
             </>
           )}
         </View>
-      </SafeAreaView>
-    </Modal>
+      </Screen>
+    </Overlay>
   );
 }
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: "black" },
   header: { alignItems: "flex-end" },
   icon: {
     width: 52,

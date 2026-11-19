@@ -1,8 +1,9 @@
 import { useRef, useState } from "react";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { ChatHeader } from "../../ui/ChatHeader";
+import { Overlay } from "../../ui/Overlay";
+import { Screen } from "../../ui/Screen";
 import { parseKeyInput } from "../../providers/openrouter/key";
 import { useColors } from "../../ui/theme";
 
@@ -18,54 +19,54 @@ export function KeyScanner({
   const [error, setError] = useState<string | null>(null);
   const scannedRef = useRef(false);
   return (
-    <SafeAreaView
-      style={[styles.screen, { backgroundColor: colors.background }]}
-    >
-      <ChatHeader
-        mode="settings"
-        title="Scan key"
-        closeLabel="Close key scanner"
-        onClose={onClose}
-      />
-      {permission?.granted ? (
-        <CameraView
-          style={styles.screen}
-          facing="back"
-          barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
-          onBarcodeScanned={({ data }) => {
-            if (scannedRef.current) return;
-            try {
-              const key = parseKeyInput(data);
-              scannedRef.current = true;
-              onRead(key);
-            } catch {
-              setError("This QR does not contain an OpenRouter key.");
-            }
-          }}
+    <Overlay placement="fill" closeLabel="Close key scanner" onClose={onClose}>
+      <Screen keyboard="pad" background={colors.background}>
+        <ChatHeader
+          mode="settings"
+          title="Scan key"
+          closeLabel="Close key scanner"
+          onClose={onClose}
         />
-      ) : (
-        <View style={styles.explanation}>
-          <Text style={[styles.hint, { color: colors.text }]}>
-            Allow the camera to scan the QR displayed on your computer.
-          </Text>
-          <Pressable
-            accessibilityRole="button"
-            onPress={() => {
-              void requestPermission();
+        {permission?.granted ? (
+          <CameraView
+            style={styles.screen}
+            facing="back"
+            barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
+            onBarcodeScanned={({ data }) => {
+              if (scannedRef.current) return;
+              try {
+                const key = parseKeyInput(data);
+                scannedRef.current = true;
+                onRead(key);
+              } catch {
+                setError("This QR does not contain an OpenRouter key.");
+              }
             }}
-            style={styles.button}
-          >
-            <Text style={{ color: colors.text }}>Allow camera</Text>
-          </Pressable>
-        </View>
-      )}
-      <Text
-        accessibilityRole={error ? "alert" : "text"}
-        style={[styles.hint, { color: colors.muted }]}
-      >
-        {error ?? "Point the camera at the key QR. It stays on this device."}
-      </Text>
-    </SafeAreaView>
+          />
+        ) : (
+          <View style={styles.explanation}>
+            <Text style={[styles.hint, { color: colors.text }]}>
+              Allow the camera to scan the QR displayed on your computer.
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => {
+                void requestPermission();
+              }}
+              style={styles.button}
+            >
+              <Text style={{ color: colors.text }}>Allow camera</Text>
+            </Pressable>
+          </View>
+        )}
+        <Text
+          accessibilityRole={error ? "alert" : "text"}
+          style={[styles.hint, { color: colors.muted }]}
+        >
+          {error ?? "Point the camera at the key QR. It stays on this device."}
+        </Text>
+      </Screen>
+    </Overlay>
   );
 }
 

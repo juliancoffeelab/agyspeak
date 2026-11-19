@@ -103,6 +103,61 @@ export default defineConfig([
             "JSXElement[openingElement.name.name=/^(View|ScrollView|Pressable|TouchableOpacity|TouchableHighlight|TouchableWithoutFeedback)$/] > JSXText[value=/\\S/]",
           message: "Wrap native container text in a Text component.",
         },
+        {
+          selector:
+            "MemberExpression[object.name='Keyboard'][property.name!='dismiss']",
+          message:
+            "Layout follows the keyboard through Screen (src/ui/Screen.tsx); only Keyboard.dismiss() is used directly.",
+        },
+      ],
+      // A layer's edges have one owner, and everything shown over the routes
+      // stays in the app's window. See src/ui/Screen.tsx and
+      // src/ui/Overlay.tsx.
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "react-native",
+              importNames: ["KeyboardAvoidingView", "SafeAreaView"],
+              message: "Lay the layer out with Screen (src/ui/Screen.tsx).",
+            },
+            {
+              name: "react-native",
+              importNames: ["Modal"],
+              message:
+                "Show it with Overlay (src/ui/Overlay.tsx): a Modal is a separate window and takes focus from the keyboard.",
+            },
+            {
+              name: "react-native-safe-area-context",
+              importNames: ["SafeAreaView", "SafeAreaProvider"],
+              message: "Lay the layer out with Screen (src/ui/Screen.tsx).",
+            },
+            {
+              name: "react-native-keyboard-controller",
+              message:
+                "Layout follows the keyboard through Screen (src/ui/Screen.tsx).",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    // The keyboard's one owner, and the root that provides it.
+    files: ["src/ui/Screen.tsx", "src/app/_layout.tsx"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "react-native",
+              importNames: ["KeyboardAvoidingView", "SafeAreaView", "Modal"],
+              message: "See src/ui/Screen.tsx and src/ui/Overlay.tsx.",
+            },
+          ],
+        },
       ],
     },
   },

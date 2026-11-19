@@ -1,5 +1,6 @@
-import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 
+import { Overlay } from "./Overlay";
 import { useColors } from "./theme";
 
 // Asks before an action that discards something. Dismissing it in any way
@@ -26,67 +27,42 @@ export function ConfirmDialog({
 }) {
   const colors = useColors();
   return (
-    <Modal transparent animationType="fade" onRequestClose={onCancel}>
-      <View style={styles.overlay}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={cancelLabel}
-          onPress={onCancel}
-          style={StyleSheet.absoluteFill}
-        />
-        <View
-          accessibilityRole="alert"
-          accessibilityViewIsModal
-          onAccessibilityEscape={onCancel}
-          style={[styles.card, { backgroundColor: colors.surface }]}
-        >
-          <Text style={[styles.title, { color: colors.text }]}>{title}</Text>
-          <Text style={[styles.message, { color: colors.muted }]}>
-            {message}
-          </Text>
-          <View style={styles.actions}>
-            <Pressable
-              accessibilityRole="button"
-              onPress={onCancel}
-              style={styles.action}
+    <Overlay placement="center" closeLabel={cancelLabel} onClose={onCancel}>
+      <View accessibilityRole="alert" style={styles.card}>
+        <Text style={[styles.title, { color: colors.text }]}>{title}</Text>
+        <Text style={[styles.message, { color: colors.muted }]}>{message}</Text>
+        <View style={styles.actions}>
+          <Pressable
+            accessibilityRole="button"
+            onPress={onCancel}
+            style={styles.action}
+          >
+            <Text style={[styles.label, { color: colors.muted }]}>
+              {cancelLabel}
+            </Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            onPress={onConfirm}
+            style={styles.action}
+          >
+            <Text
+              style={[
+                styles.label,
+                { color: tone === "danger" ? colors.danger : colors.text },
+              ]}
             >
-              <Text style={[styles.label, { color: colors.muted }]}>
-                {cancelLabel}
-              </Text>
-            </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              onPress={onConfirm}
-              style={styles.action}
-            >
-              <Text
-                style={[
-                  styles.label,
-                  { color: tone === "danger" ? colors.danger : colors.text },
-                ]}
-              >
-                {confirmLabel}
-              </Text>
-            </Pressable>
-          </View>
+              {confirmLabel}
+            </Text>
+          </Pressable>
         </View>
       </View>
-    </Modal>
+    </Overlay>
   );
 }
 
 const styles = StyleSheet.create({
-  overlay: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    padding: 24,
-    backgroundColor: "rgba(0,0,0,0.4)",
-  },
   card: {
-    width: "100%",
-    maxWidth: 400,
-    borderRadius: 20,
     paddingTop: 24,
     paddingHorizontal: 24,
     paddingBottom: 12,
