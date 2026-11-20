@@ -31,6 +31,7 @@
     "markdown-it": "^15.0.3",
     "react": "19.3.0",
     "react-native": "0.88.0",
+    "react-native-drawer-layout": "~4.2.13",
     "react-native-enriched-markdown": "^1.2.0",
     "react-native-gesture-handler": "~3.3.0",
     "react-native-keyboard-controller": "1.22.7",

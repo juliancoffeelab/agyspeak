@@ -15,3 +15,5 @@ minimumReleaseAgeExclude:
   - globals@17.14.0
 allowBuilds:
   react-native-enriched-markdown: true
+patchedDependencies:
+  react-native-enriched-markdown@1.2.0: patches/react-native-enriched-markdown@1.2.0.patch

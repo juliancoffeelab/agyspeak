@@ -89,6 +89,17 @@ export function useDraftPreview(
   return stored;
 }
 
+// Whether chat `id` holds an unsent draft, for what is shown while the draft
+// is typed: it changes only when the draft starts or stops being one.
+export function useDrafted(id: string, stored: DraftSummary): boolean {
+  const draft = useChatState((state) => state.draft);
+  return useSyncExternalStore(draft.subscribe, () =>
+    draft.chatId === id
+      ? summarizeDraft(draft.value.text, draft.getPhotos().length) !== null
+      : stored !== null,
+  );
+}
+
 // The header's model name, empty until the chats are open.
 export function useOpenChatModelName() {
   const scope = use(ChatScopeContext);

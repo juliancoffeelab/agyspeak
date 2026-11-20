@@ -25,17 +25,48 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useColors } from "./theme";
 
 // The one owner of a layer's edges: the safe area and the keyboard. A layer
-// is a route or an overlay; every one of them is laid out by a `Screen`.
+// is a route, a panel beside a route or an overlay; every one of them is laid
+// out by a `Screen`.
 //
 // A layer follows the keyboard only when its own input raised it: it must be
 // the top layer when the keyboard starts to open, and it keeps following
 // until the keyboard has closed. So a layer that opens or closes while the
 // keyboard moves never reacts to a keyboard that isn't its own.
 
-// Whether an overlay is the top layer; null in a route.
+// Whether an overlay or a panel is the top layer; null in a route.
 export const OverlayTopContext = createContext<boolean | null>(null);
-// Whether an overlay covers the routes.
+// Whether another layer covers the routes.
 export const CoveredContext = createContext(false);
+
+// A panel beside a route, such as a drawer, is a layer of its own: while it
+// is open it is the top layer in its route's place. `Panel` goes around the
+// panel and `BesidePanel` around the route's own content.
+export function Panel({
+  open,
+  children,
+}: {
+  open: boolean;
+  children: ReactNode;
+}) {
+  const focused = useIsFocused();
+  const covered = use(CoveredContext);
+  return (
+    <OverlayTopContext value={open && focused && !covered}>
+      {children}
+    </OverlayTopContext>
+  );
+}
+
+export function BesidePanel({
+  open,
+  children,
+}: {
+  open: boolean;
+  children: ReactNode;
+}) {
+  const covered = use(CoveredContext);
+  return <CoveredContext value={covered || open}>{children}</CoveredContext>;
+}
 
 type Layer = {
   follows: boolean;

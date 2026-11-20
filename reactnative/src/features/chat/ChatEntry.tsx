@@ -4,6 +4,7 @@ import { useFocusEffect, useIsFocused, useRouter } from "expo-router";
 
 import { ChatBody, ChatLayout, ChatNotices } from "./ChatLayout";
 import { ComposerRegion } from "./Composer";
+import { History } from "./History";
 import { OpenFailure } from "./OpenFailure";
 import {
   useOpenChatScope,
@@ -11,17 +12,22 @@ import {
   useOpenChatState,
 } from "./chatContext";
 import { AboveDock } from "../../ui/Screen";
+import { SideDrawer } from "../../ui/SideDrawer";
 import { useColors } from "../../ui/theme";
 import { screenStyles } from "../../ui/screenStyles";
 import type { PhotoReference } from "./storage/contracts";
 
 // The chat destination: one layout, mounted from the first frame, whose
-// header, conversation and composer regions fill in place. `status` fills
-// the conversation region until the chats are open. The coordinator owns
-// which chat is shown; this screen only asks it to open another.
+// header, conversation and composer regions fill in place, with History in
+// a drawer beside it. `status` fills the conversation region, and History's
+// list, until the chats are open. The coordinator owns which chat is shown;
+// this screen only asks it to open another.
 export function ChatEntry({ status }: { status: ReactNode }) {
   const router = useRouter();
-  const focused = useIsFocused();
+  const [historyOpen, setHistoryOpen] = useState(false);
+  // The chat is in use while its route is focused and History is closed.
+  const focused = useIsFocused() && !historyOpen;
+  const activeId = useOpenChatState((state) => state.history.activeId, null);
   // The new chat is the one with no messages yet.
   const inNewChat = useOpenChatState(
     (state) => state.history.messages.length === 0,
@@ -38,21 +44,40 @@ export function ChatEntry({ status }: { status: ReactNode }) {
   );
   const onOpenSettings = () => router.push("/settings");
 
-  // Back from a saved chat opens the new chat on this same screen; Back
-  // from the new chat leaves the app as usual.
-  const backToNew = ready && !inNewChat;
+  // The chat History last opened, until Back has returned from it.
+  const [fromHistory, setFromHistory] = useState<string | null>(null);
+  const openFromHistory = (id: string | null) => {
+    if (id !== activeId) open(id);
+    setFromHistory(id);
+    setHistoryOpen(false);
+  };
+
+  // Back closes History, keeping the chat beside it. Back from a chat that
+  // History opened returns to History once; from any other saved chat it
+  // opens the new chat, and from the new chat it leaves the app as usual.
+  const back = historyOpen
+    ? "closeHistory"
+    : !ready
+      ? null
+      : fromHistory !== null && fromHistory === activeId
+        ? "toHistory"
+        : inNewChat
+          ? null
+          : "toNew";
   useFocusEffect(
     useCallback(() => {
-      if (!backToNew) return;
+      if (back === null) return;
       const subscription = BackHandler.addEventListener(
         "hardwareBackPress",
         () => {
-          open(null);
+          setFromHistory(null);
+          if (back === "toNew") open(null);
+          else setHistoryOpen(back === "toHistory");
           return true;
         },
       );
       return () => subscription.remove();
-    }, [backToNew, open]),
+    }, [back, open]),
   );
 
   // What the open chat shows over its layout, closed whenever it doesn't.
@@ -66,57 +91,73 @@ export function ChatEntry({ status }: { status: ReactNode }) {
   }
 
   return (
-    <ChatLayout
-      modelSelector={{
-        label: modelName,
-        disabled: !ready || saving,
-        onPress: () => setChoosingModel(true),
-      }}
-      newChatDisabled={!ready || saving || inNewChat}
-      navigationDisabled={saving}
-      onNewChat={() => open(null)}
-      onOpenHistory={() => router.push("/history")}
-      onOpenSettings={onOpenSettings}
-      dock={
-        <>
-          {ready && <ChatNotices onOpenSettings={onOpenSettings} />}
-          <ComposerRegion
-            ready={ready}
-            active={focused && !choosingModel}
-            onOpenPhoto={setPhoto}
-            onSent={() => setScrollRequest((value) => value + 1)}
-          />
-        </>
+    <SideDrawer
+      open={historyOpen}
+      onOpen={() => setHistoryOpen(true)}
+      onClose={() => setHistoryOpen(false)}
+      closeLabel="Close chat history"
+      panel={
+        <History
+          status={status}
+          onOpenChat={openFromHistory}
+          onClose={() => setHistoryOpen(false)}
+          onOpenSettings={onOpenSettings}
+        />
       }
     >
-      {!ready ? (
-        <AboveDock>
-          <View style={styles.status}>{status}</View>
-        </AboveDock>
-      ) : failure ? (
-        <AboveDock>
-          <OpenFailure
-            error={failure.error}
-            onRetry={() => open(failure.id)}
-            onDismiss={() => commands.dismissError()}
+      <ChatLayout
+        modelSelector={{
+          label: modelName,
+          disabled: !ready || saving,
+          onPress: () => setChoosingModel(true),
+        }}
+        newChatDisabled={!ready || saving || inNewChat}
+        navigationDisabled={saving}
+        onNewChat={() => open(null)}
+        onOpenHistory={() => setHistoryOpen(true)}
+        onOpenSettings={onOpenSettings}
+        dock={
+          <>
+            {ready && <ChatNotices onOpenSettings={onOpenSettings} />}
+            <ComposerRegion
+              ready={ready}
+              active={focused && !choosingModel}
+              onOpenPhoto={setPhoto}
+              onSent={() => setScrollRequest((value) => value + 1)}
+            />
+          </>
+        }
+      >
+        {!ready ? (
+          <AboveDock>
+            <View style={styles.status}>{status}</View>
+          </AboveDock>
+        ) : failure ? (
+          <AboveDock>
+            <OpenFailure
+              error={failure.error}
+              onRetry={() => open(failure.id)}
+              onDismiss={() => commands.dismissError()}
+            />
+          </AboveDock>
+        ) : (
+          <ChatBody
+            focused={focused}
+            choosingModel={choosingModel}
+            onCloseModel={() => setChoosingModel(false)}
+            photo={photo}
+            onOpenPhoto={setPhoto}
+            onClosePhoto={closePhoto}
+            scrollRequest={scrollRequest}
           />
-        </AboveDock>
-      ) : (
-        <ChatBody
-          focused={focused}
-          choosingModel={choosingModel}
-          onCloseModel={() => setChoosingModel(false)}
-          photo={photo}
-          onOpenPhoto={setPhoto}
-          onClosePhoto={closePhoto}
-          scrollRequest={scrollRequest}
-        />
-      )}
-    </ChatLayout>
+        )}
+      </ChatLayout>
+    </SideDrawer>
   );
 }
 
-// A route that names no destination, such as a malformed link.
+// A route that names no destination, such as a malformed link. It has no
+// chats to list, so History can't be opened from it.
 export function UnknownRoute() {
   const router = useRouter();
   const colors = useColors();
@@ -124,9 +165,9 @@ export function UnknownRoute() {
     <ChatLayout
       modelSelector={null}
       newChatDisabled
-      navigationDisabled={false}
+      navigationDisabled
       onNewChat={() => {}}
-      onOpenHistory={() => router.push("/history")}
+      onOpenHistory={() => {}}
       onOpenSettings={() => router.push("/settings")}
       dock={
         <ComposerRegion

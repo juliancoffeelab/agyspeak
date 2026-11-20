@@ -1,0 +1,27 @@
+diff --git a/android/src/main/java/com/swmansion/enriched/markdown/slots/BlockSlotLayer.kt b/android/src/main/java/com/swmansion/enriched/markdown/slots/BlockSlotLayer.kt
+index 30c0a172485f07be57fde91e79326de96489afb9..3aa04bd6b6d1a25698a23057a5f2822a345b3a89 100644
+--- a/android/src/main/java/com/swmansion/enriched/markdown/slots/BlockSlotLayer.kt
++++ b/android/src/main/java/com/swmansion/enriched/markdown/slots/BlockSlotLayer.kt
+@@ -2,6 +2,8 @@ package com.swmansion.enriched.markdown.slots
+ 
+ import android.content.Context
+ import android.view.ViewGroup
++import com.facebook.react.uimanager.PointerEvents
++import com.facebook.react.uimanager.ReactPointerEventsView
+ 
+ /**
+  * Holds the GFM host's Fabric children (the slot views) apart from the segment
+@@ -11,7 +13,12 @@ import android.view.ViewGroup
+  */
+ class BlockSlotLayer(
+   context: Context,
+-) : ViewGroup(context) {
++) : ViewGroup(context),
++  ReactPointerEventsView {
++  // The layer spans the whole host above the text. Only its slots take
++  // touches, so a touch lookup that misses them reaches the text below.
++  override val pointerEvents: PointerEvents = PointerEvents.BOX_NONE
++
+   init {
+     // Slot shadows draw past the slot bounds.
+     clipChildren = false

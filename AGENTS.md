@@ -95,6 +95,9 @@ requests. Prefer offline checks when live inference is unnecessary. For paid
 runs, state the planned request count and estimated cost, keep calls and retries
 within the user's authorized scope and budget, and report actual cost when
 available. Verify pricing rather than assuming a route is free.
+Free models exist tho, so feel free to use them, when needed to test inference,
+and even with them being usually heavily rate-limited, I guess it's a good way
+to test when things go badly.
 
 
 ## Interruptions
