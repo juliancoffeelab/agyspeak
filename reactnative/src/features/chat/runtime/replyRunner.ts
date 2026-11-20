@@ -103,7 +103,7 @@ export function createReplyRunner(ports: RunnerPorts) {
       if (issue) throw new Error(issue);
       const completion = await ports.reply(
         toProviderContext(messages),
-        settings,
+        { ...settings, sessionId: run.chatId },
         run.abort.signal,
         (text) => {
           if (!run.settled) run.stream.update(text);
@@ -126,7 +126,7 @@ export function createReplyRunner(ports: RunnerPorts) {
       // Diagnostics contain usage metadata only, never credentials or prompts.
       console.info("AGSpeak OpenRouter completion", {
         model: completion.model,
-        costUSD: completion.cost,
+        ...completion.usage,
       });
     } catch (cause) {
       if (run.settled) return;

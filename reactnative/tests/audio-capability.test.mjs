@@ -11,6 +11,14 @@ import {
   readLatest,
 } from "./sqlite-helper.mjs";
 
+// Usage a mocked reply reports: none.
+const MOCK_USAGE = {
+  costUSD: null,
+  promptTokens: null,
+  completionTokens: null,
+  cachedPromptTokens: null,
+  cacheWritePromptTokens: null,
+};
 const models = [
   {
     id: "text",
@@ -138,7 +146,7 @@ test("a text model can still send plain text in a conversation without audio", a
     openAt: await latestId(store),
     reply: async () => {
       requests++;
-      return { text: "Reply", model: "text", cost: 0, stopped: null };
+      return { text: "Reply", model: "text", usage: MOCK_USAGE, stopped: null };
     },
     audioIssue: (model) => audioInputIssue(model, models),
     settings: () => settings,
@@ -163,7 +171,12 @@ test("the final context is checked again before starting inference", async () =>
     openAt: await latestId(store),
     reply: async () => {
       requests++;
-      return { text: "Unexpected", model: "audio", cost: 0, stopped: null };
+      return {
+        text: "Unexpected",
+        model: "audio",
+        usage: MOCK_USAGE,
+        stopped: null,
+      };
     },
     audioIssue: () => (allowed ? null : "Audio unavailable"),
     settings: () => settings,

@@ -7,6 +7,14 @@ import {
   readLatest,
 } from "./sqlite-helper.mjs";
 
+// Usage a mocked reply reports: none.
+const MOCK_USAGE = {
+  costUSD: null,
+  promptTokens: null,
+  completionTokens: null,
+  cachedPromptTokens: null,
+  cacheWritePromptTokens: null,
+};
 const settings = { apiKey: "test-key", model: "test/model" };
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 function deferred() {
@@ -40,7 +48,7 @@ test("elapsed response time is saved for completion, Stop and retry without usin
     attempt.resolve({
       text: "Complete",
       model: "test/model",
-      cost: 0,
+      usage: MOCK_USAGE,
       stopped: null,
     });
     await tick();

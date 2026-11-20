@@ -19,6 +19,14 @@ import {
 } from "../src/features/chat/runtime/capability.ts";
 import { parseModels } from "../src/providers/openrouter/metadata.ts";
 
+// Usage a mocked reply reports: none.
+const MOCK_USAGE = {
+  costUSD: null,
+  promptTokens: null,
+  completionTokens: null,
+  cachedPromptTokens: null,
+  cacheWritePromptTokens: null,
+};
 const photo = { data: "/9j/", thumbnail: "/9j/", width: 100, height: 80 };
 let settings = { apiKey: "test-key", model: "text" };
 // Runs one call with changed settings; they are read as the call starts.
@@ -173,7 +181,12 @@ test("unsupported photo sends and follow-ups preserve drafts without inference",
     openAt: await latestId(store),
     reply: async () => {
       calls++;
-      return { text: "reply", model: "vision", cost: 0, stopped: null };
+      return {
+        text: "reply",
+        model: "vision",
+        usage: MOCK_USAGE,
+        stopped: null,
+      };
     },
     imageIssue: (model) => (model === "vision" ? null : "No image support"),
     settings: () => settings,
@@ -225,7 +238,7 @@ test("photo retry keeps the original attachment and blocks incompatible models b
     openAt: await latestId(store),
     reply: async (messages) => {
       received = messages;
-      return { text: "ok", model: "vision", cost: 0, stopped: null };
+      return { text: "ok", model: "vision", usage: MOCK_USAGE, stopped: null };
     },
     imageIssue: (model) => (model === "vision" ? null : "No image support"),
     settings: () => settings,
@@ -261,7 +274,12 @@ test("actual image context is checked again before calling inference", async () 
     openAt: await latestId(store),
     reply: async () => {
       calls++;
-      return { text: "unexpected", model: "vision", cost: 0, stopped: null };
+      return {
+        text: "unexpected",
+        model: "vision",
+        usage: MOCK_USAGE,
+        stopped: null,
+      };
     },
     imageIssue: () => (allowed ? null : "Images unavailable"),
     settings: () => settings,

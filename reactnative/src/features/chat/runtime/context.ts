@@ -10,7 +10,10 @@ export type ContextEntry = {
   photos?: { encodedLength?: number; data?: string }[];
 };
 
-// Select context using metadata before reading any recording bytes.
+// Select context using metadata before reading any recording bytes: the
+// newest messages, as many as the budgets allow. The text budget is soft at
+// the message that crosses it, which is included whole and ends the walk, so
+// one long message never empties the context. The media budget is hard.
 export function selectContext<T extends ContextEntry>(messages: T[]): T[] {
   const selected: T[] = [];
   let textRemaining = 24_000;
@@ -41,10 +44,10 @@ export function selectContext<T extends ContextEntry>(messages: T[]): T[] {
     mediaRemaining -= photoBytes;
     if (!message.audio) {
       if (!message.text && !message.photos?.length) continue;
-      if (message.text.length > textRemaining) break;
       textRemaining -= message.text.length;
     }
     selected.unshift(message);
+    if (textRemaining <= 0) break;
   }
   return selected;
 }

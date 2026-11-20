@@ -10,6 +10,7 @@ import { parseKeyInput } from "../src/providers/openrouter/key.ts";
 const settings = {
   apiKey: "sk-or-v1-dummy-never-sent",
   model: "openrouter/free",
+  sessionId: "0b5c2f3e-8d4a-4c1e-9f7a-2e6d1b3c5a90",
   maxTokens: 27_000,
 };
 const user = { id: 1, role: "user", text: "Hello", status: "complete" };
@@ -28,6 +29,7 @@ test("request is bounded, authenticated, and parsed without a live API call", as
       assert.equal(body.model, "openrouter/free");
       assert.equal(body.max_tokens, 27_000);
       assert.equal(body.stream, true);
+      assert.equal(body.session_id, settings.sessionId);
       assert.deepEqual(body.messages, [{ role: "user", content: "Hello" }]);
       return streamResponse("Hi!", "chosen/free-model", 0);
     },
@@ -35,7 +37,13 @@ test("request is bounded, authenticated, and parsed without a live API call", as
   assert.deepEqual(result, {
     text: "Hi!",
     model: "chosen/free-model",
-    cost: 0,
+    usage: {
+      costUSD: 0,
+      promptTokens: null,
+      completionTokens: null,
+      cachedPromptTokens: null,
+      cacheWritePromptTokens: null,
+    },
     stopped: null,
   });
 });
@@ -69,16 +77,23 @@ test("authentication/rate-limit and malformed responses fail without automatic r
   );
 });
 
-test("context excludes unfinished replies and is limited to recent text", () => {
+test("context excludes unfinished replies and ends whole at the message crossing the text budget", () => {
+  const long = "long".repeat(7000);
   const history = [
-    { ...user, text: "old".repeat(9000) },
+    { ...user, text: "Older" },
+    { ...user, role: "assistant", text: long },
     user,
     { ...user, role: "assistant", text: "Failure", status: "failed" },
     { ...user, role: "assistant", text: "", status: "pending" },
   ];
   assert.deepEqual(requestMessages(toProviderContext(history)), [
+    { role: "assistant", content: long },
     { role: "user", content: "Hello" },
   ]);
+  assert.deepEqual(
+    requestMessages(toProviderContext([{ ...user, text: long }])),
+    [{ role: "user", content: long }],
+  );
 });
 
 test("aborting propagates to the transport", async () => {
@@ -216,7 +231,7 @@ test("audio sends only the recording and reads an ordinary text answer", async (
     },
   );
   assert.equal(result.text, "Hej!");
-  assert.equal(result.cost, 0.001);
+  assert.equal(result.usage.costUSD, 0.001);
 });
 
 test("invalid audio never reaches the network", async () => {

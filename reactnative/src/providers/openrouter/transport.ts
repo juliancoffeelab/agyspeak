@@ -11,17 +11,29 @@ export type ProviderMessage = {
   photos?: PhotoPayload[];
 };
 export type ReplyRequest = { apiKey: string; model: string };
+// `sessionId` keeps one conversation's requests together, so OpenRouter
+// routes them to one provider and its prompt cache can be reused.
+export type SessionRequest = ReplyRequest & { sessionId: string };
+// What a reply reports about itself; each is null when it went unreported.
+// Cached tokens are prompt tokens read from the provider's prompt cache.
+export type Usage = {
+  costUSD: number | null;
+  promptTokens: number | null;
+  completionTokens: number | null;
+  cachedPromptTokens: number | null;
+  cacheWritePromptTokens: number | null;
+};
 // `stopped` is why a reply ended before the model finished it: the output
 // limit was reached, or a time limit below ran out. The text so far is kept.
 export type Completion = {
   text: string;
   model: string;
-  cost: number | null;
+  usage: Usage;
   stopped: "length" | "timeout" | null;
 };
 export type StreamReply = (
   messages: ProviderMessage[],
-  request: ReplyRequest,
+  request: SessionRequest,
   signal: AbortSignal,
   onText: (text: string) => void,
 ) => Promise<Completion>;
@@ -147,7 +159,19 @@ const streamEvent = z.object({
     ]),
   ),
   model: optional(z.string()),
-  usage: optional(z.object({ cost: optional(z.number()) })),
+  usage: optional(
+    z.object({
+      cost: optional(z.number()),
+      prompt_tokens: optional(z.number()),
+      completion_tokens: optional(z.number()),
+      prompt_tokens_details: optional(
+        z.object({
+          cached_tokens: optional(z.number()),
+          cache_write_tokens: optional(z.number()),
+        }),
+      ),
+    }),
+  ),
   choices: optional(
     z.array(z.unknown()).transform((choices) => {
       const parsed = firstChoice.safeParse(choices[0]);
@@ -199,7 +223,7 @@ function providerError(status: number, body: unknown, apiKey: string) {
 
 export async function completeReply(
   messages: ProviderMessage[],
-  settings: ReplyRequest & { maxTokens: number },
+  settings: SessionRequest & { maxTokens: number },
   signal: AbortSignal,
   onText: (text: string) => void,
   fetcher: typeof fetch,
@@ -218,7 +242,17 @@ export async function completeReply(
   let silence = setTimeout(expire, SILENCE_LIMIT_MILLIS);
   let text = "";
   let model = settings.model;
-  let cost: number | null = null;
+  const usage: Usage = {
+    costUSD: null,
+    promptTokens: null,
+    completionTokens: null,
+    cachedPromptTokens: null,
+    cacheWritePromptTokens: null,
+  };
+  // The latest reported value of each counts; others keep theirs.
+  const report = (field: keyof Usage, value: number | undefined) => {
+    if (value !== undefined && Number.isFinite(value)) usage[field] = value;
+  };
   // A rejected request or body read is the connection failing, whatever the
   // platform calls it. An abort is our own and passes through.
   const unreachable = (cause: unknown): never => {
@@ -241,6 +275,7 @@ export async function completeReply(
         signal: controller.signal,
         body: JSON.stringify({
           model: settings.model,
+          session_id: settings.sessionId,
           messages: context,
           max_tokens: settings.maxTokens,
           stream: true,
@@ -287,8 +322,14 @@ export async function completeReply(
         if (data.error)
           throw providerError(data.error.code ?? 502, json, settings.apiKey);
         if (data.model !== undefined) model = data.model;
-        if (data.usage?.cost !== undefined && Number.isFinite(data.usage.cost))
-          cost = data.usage.cost;
+        if (data.usage) {
+          const details = data.usage.prompt_tokens_details;
+          report("costUSD", data.usage.cost);
+          report("promptTokens", data.usage.prompt_tokens);
+          report("completionTokens", data.usage.completion_tokens);
+          report("cachedPromptTokens", details?.cached_tokens);
+          report("cacheWritePromptTokens", details?.cache_write_tokens);
+        }
         if (data.choices?.finish === "length") truncated = true;
         if (data.choices?.content) {
           text += data.choices.content;
@@ -307,9 +348,9 @@ export async function completeReply(
         parser.feed(decoder.decode(chunk.value, { stream: true }));
       }
       if (!finished) throw new Error("The response stream ended early.");
-      if (truncated) return { text, model, cost, stopped: "length" };
+      if (truncated) return { text, model, usage, stopped: "length" };
       if (!text.trim()) throw new Error("The model returned no text.");
-      return { text, model, cost, stopped: null };
+      return { text, model, usage, stopped: null };
     } finally {
       // Cancel unread bytes on Stop, parser errors, or after the terminal frame.
       await reader.cancel().catch(() => undefined);
@@ -317,7 +358,7 @@ export async function completeReply(
     }
   } catch (cause) {
     if (timedOut && !signal.aborted)
-      return { text, model, cost, stopped: "timeout" };
+      return { text, model, usage, stopped: "timeout" };
     throw cause;
   } finally {
     clearTimeout(ceiling);

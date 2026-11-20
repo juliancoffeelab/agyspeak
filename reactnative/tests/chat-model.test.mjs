@@ -8,6 +8,14 @@ import {
   readLatest,
 } from "./sqlite-helper.mjs";
 
+// Usage a mocked reply reports: none.
+const MOCK_USAGE = {
+  costUSD: null,
+  promptTokens: null,
+  completionTokens: null,
+  cachedPromptTokens: null,
+  cacheWritePromptTokens: null,
+};
 let settings = { apiKey: "test-key", model: "alpha" };
 // Runs one call with changed settings; they are read as the call starts.
 function withSettings(change, call) {
@@ -93,7 +101,12 @@ test("switching during a reply preserves its model and draft; next send uses the
     assert.equal(controller.state.getState().draft, draft);
     assert.equal(draft.value.text, "next message");
     assert.deepEqual(requests, ["alpha"]);
-    resolve({ text: "done", model: "routed/model", cost: 0, stopped: null });
+    resolve({
+      text: "done",
+      model: "routed/model",
+      usage: MOCK_USAGE,
+      stopped: null,
+    });
     await tick();
     assert.equal(controller.state.getState().history.selectedModel, "beta");
     assert.equal(
@@ -142,7 +155,12 @@ test("a failed activation read cannot commit chat navigation or mix the pending 
     assert.equal(await controller.select("b"), false);
     assert.equal(controller.state.getState().openFailure.id, "b");
     assert.equal((await readLatest(store)).activeId, "chat");
-    resolve({ text: "reply A", model: "alpha", cost: 0, stopped: null });
+    resolve({
+      text: "reply A",
+      model: "alpha",
+      usage: MOCK_USAGE,
+      stopped: null,
+    });
     await tick();
     assert.equal(controller.state.getState().history.activeId, "chat");
     assert.equal(controller.state.getState().draft, draft);

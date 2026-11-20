@@ -8,6 +8,14 @@ import {
 } from "./sqlite-helper.mjs";
 import { StreamingText } from "../src/features/chat/runtime/StreamingText.ts";
 
+// Usage a mocked reply reports: none.
+const MOCK_USAGE = {
+  costUSD: null,
+  promptTokens: null,
+  completionTokens: null,
+  cachedPromptTokens: null,
+  cacheWritePromptTokens: null,
+};
 let settings = { apiKey: "sk-or-v1-dummy-never-sent", model: "test/model" };
 // Runs one call with changed settings; they are read as the call starts.
 function withSettings(change, call) {
@@ -76,7 +84,7 @@ test("send saves the user message before inference; failure and retry reuse the 
     second.resolve({
       text: "Hi!",
       model: "actual/model",
-      cost: 0,
+      usage: MOCK_USAGE,
       stopped: null,
     });
     await waitFor(controller, (s) => !s.pending.length);
@@ -117,7 +125,7 @@ test("stop aborts; late completion cannot overwrite stopped status; navigation s
     request.resolve({
       text: "Too late",
       model: "test",
-      cost: 0,
+      usage: MOCK_USAGE,
       stopped: null,
     });
     await Promise.resolve();
@@ -140,7 +148,7 @@ test("deleting a generating chat cannot resurrect it when the response arrives",
     request.resolve({
       text: "Too late",
       model: "test",
-      cost: 0,
+      usage: MOCK_USAGE,
       stopped: null,
     });
     await Promise.resolve();
@@ -164,7 +172,7 @@ test("blocked or failed save never starts inference", async () => {
   let calls = 0;
   const { controller, store, sqlite } = await setup(async () => {
     calls++;
-    return { text: "No", model: "test", cost: 0, stopped: null };
+    return { text: "No", model: "test", usage: MOCK_USAGE, stopped: null };
   });
   try {
     assert.equal(
@@ -191,7 +199,12 @@ test("completion in another chat updates its history without changing current se
     await controller.select(null);
     const fresh = controller.state.getState().history.activeId;
     assert.notEqual(fresh, chatId);
-    request.resolve({ text: "Done", model: "test", cost: 0, stopped: null });
+    request.resolve({
+      text: "Done",
+      model: "test",
+      usage: MOCK_USAGE,
+      stopped: null,
+    });
     await waitFor(controller, (s) => !s.pending.length);
     assert.equal(controller.state.getState().history.activeId, fresh);
     assert.deepEqual(controller.state.getState().history.messages, []);
@@ -208,7 +221,7 @@ test("disposing during the initial save cannot start a late model request", asyn
   let calls = 0;
   const { controller, store, sqlite } = await setup(async () => {
     calls++;
-    return { text: "Late", model: "test", cost: 0, stopped: null };
+    return { text: "Late", model: "test", usage: MOCK_USAGE, stopped: null };
   });
   const original = store.beginReply.bind(store);
   const entered = deferred();
@@ -250,7 +263,12 @@ test("voice audio and its level display survive failure, retry, and successful c
         format: audio.format,
       });
       if (calls === 1) throw new Error("Offline");
-      return { text: "Hej!", model: selected.model, cost: 0, stopped: null };
+      return {
+        text: "Hej!",
+        model: selected.model,
+        usage: MOCK_USAGE,
+        stopped: null,
+      };
     },
   );
   try {
@@ -293,7 +311,12 @@ test("stopping while lazy audio is loading cannot start a late model request", a
   let calls = 0;
   const { controller, store, sqlite } = await setup(async () => {
     calls++;
-    return { text: "No", model: "test/model", cost: 0, stopped: null };
+    return {
+      text: "No",
+      model: "test/model",
+      usage: MOCK_USAGE,
+      stopped: null,
+    };
   });
   const entered = deferred(),
     gate = deferred();
@@ -384,7 +407,7 @@ test("stream updates only the reply store; Stop persists partial text and ignore
     request.resolve({
       text: "Late completion",
       model: "test",
-      cost: 0,
+      usage: MOCK_USAGE,
       stopped: null,
     });
     await new Promise((resolve) => setImmediate(resolve));
@@ -430,7 +453,7 @@ test("failed streams retain partial text and retry starts with an empty reply st
     requests[1].resolve({
       text: "Complete reply",
       model: "actual",
-      cost: 0,
+      usage: MOCK_USAGE,
       stopped: null,
     });
     await waitFor(controller, (state) => !state.pending.length);
@@ -480,7 +503,7 @@ test("a reply whose save fails is kept in memory and closes only its chat to new
   const { controller, store, sqlite } = await setup(async () => ({
     text: "Kept reply",
     model: "test/model",
-    cost: 0,
+    usage: MOCK_USAGE,
   }));
   const finish = store.finishReply.bind(store);
   store.finishReply = async () => {
@@ -524,7 +547,7 @@ test("a reply cut short by a limit is saved as stopped, with its text and the re
     const { controller, store, sqlite } = await setup(async () => ({
       text: "Half an ans",
       model: "test/model",
-      cost: 0,
+      usage: MOCK_USAGE,
       stopped,
     }));
     try {
@@ -546,7 +569,7 @@ test("retrying the latest finished reply replaces it in the same row", async () 
   const { controller, store, sqlite } = await setup(async () => ({
     text: `Answer ${++calls}`,
     model: "test/model",
-    cost: 0,
+    usage: MOCK_USAGE,
     stopped: null,
   }));
   try {

@@ -5,7 +5,15 @@ import { completeReply } from "../src/providers/openrouter/transport.ts";
 const settings = {
   apiKey: "sk-or-test-never-sent",
   model: "test/model",
+  sessionId: "0b5c2f3e-8d4a-4c1e-9f7a-2e6d1b3c5a90",
   maxTokens: 27_000,
+};
+const unreported = {
+  costUSD: null,
+  promptTokens: null,
+  completionTokens: null,
+  cachedPromptTokens: null,
+  cacheWritePromptTokens: null,
 };
 const messages = [{ id: 1, role: "user", text: "Hello", status: "complete" }];
 function frame(data) {
@@ -39,7 +47,12 @@ test("SSE handles byte boundaries, CRLF, comments, Unicode, reasoning, and termi
     frame(delta("å😀!")) +
     frame({
       choices: [{ delta: {}, finish_reason: "stop" }],
-      usage: { cost: 0.0002 },
+      usage: {
+        cost: 0.0002,
+        prompt_tokens: 1200,
+        completion_tokens: 3,
+        prompt_tokens_details: { cached_tokens: 1024, cache_write_tokens: 0 },
+      },
     }) +
     "data: [DONE]\r\n\r\n";
   const result = await completeReply(
@@ -53,7 +66,13 @@ test("SSE handles byte boundaries, CRLF, comments, Unicode, reasoning, and termi
   assert.deepEqual(result, {
     text: "Hej å😀!",
     model: "actual/model",
-    cost: 0.0002,
+    usage: {
+      costUSD: 0.0002,
+      promptTokens: 1200,
+      completionTokens: 3,
+      cachedPromptTokens: 1024,
+      cacheWritePromptTokens: 0,
+    },
     stopped: null,
   });
 });
@@ -90,7 +109,7 @@ test("text arrives before the response finishes; final metadata is consumed befo
       frame({ choices: [], usage: { cost: 0.001 } }) + "data: [DONE]\n\n",
     ),
   );
-  assert.equal((await task).cost, 0.001);
+  assert.equal((await task).usage.costUSD, 0.001);
 });
 
 test("truncated and malformed streams fail once, retaining already delivered text", async () => {
@@ -187,7 +206,7 @@ test("a reply cut off at the output limit keeps its text and says why", async ()
   assert.deepEqual(result, {
     text: "Half an ans",
     model: "test/model",
-    cost: null,
+    usage: unreported,
     stopped: "length",
   });
 });
@@ -241,7 +260,7 @@ test("silence ends a reply as timed out; stream events, not keep-alives, postpon
   assert.deepEqual(await task, {
     text: "Thinking done. ",
     model: "test/model",
-    cost: null,
+    usage: unreported,
     stopped: "timeout",
   });
 });
