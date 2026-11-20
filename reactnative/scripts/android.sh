@@ -35,6 +35,18 @@ if [ "${1:-}" = "start" ]; then
   fi
 fi
 
+# Expo opens the dev app at the Mac's network address, which a phone on
+# another network can't reach, and the app then reopens it on every plain
+# launch. With a USB phone, name the cable's end instead; Expo forwards the
+# port itself when it opens the app. The variable is Expo's own, undocumented.
+case "${1:-}" in
+  start | run:android)
+    if [ "$(adb -d get-state 2>/dev/null || true)" = "device" ]; then
+      export REACT_NATIVE_PACKAGER_HOSTNAME=localhost
+    fi
+    ;;
+esac
+
 usb_serial=
 if [ "${1:-}" = "install-release" ]; then
   if ! usb_serial=$(adb -d get-serialno) || [ "$usb_serial" = "unknown" ]; then
