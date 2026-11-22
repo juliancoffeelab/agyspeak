@@ -9,6 +9,7 @@ fi
 export PATH="${JAVA_HOME:+$JAVA_HOME/bin:}$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
 
 # A USB phone reaches Metro through the cable, on the port Metro listens on.
+forwarded=
 if [ "${1:-}" = "start" ]; then
   port=${RCT_METRO_PORT:-8081}
   previous=
@@ -22,6 +23,7 @@ if [ "${1:-}" = "start" ]; then
     '' | 0 | *[!0-9]*) port= ;;
     *) if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then port=; fi ;;
   esac
+  forwarded=$port
   if [ "$(adb -d get-state 2>/dev/null || true)" != "device" ]; then
     printf 'No USB phone to forward Metro to; continuing.\n' >&2
   elif [ -n "$port" ]; then
@@ -87,6 +89,20 @@ if [ "${1:-}" = "build-apk" ] || [ "${1:-}" = "build-release" ]; then
     adb -s "$usb_serial" shell am start -n "$app_id/.MainActivity"
   fi
   exit 0
+fi
+
+# The forward belongs to the phone's USB session and goes whenever that is
+# reset: a cable moved, the phone waking, adb restarting. Nothing puts it
+# back, and the app then finds no Metro. Keep it up while Metro runs, for a
+# phone attached later too. This shell becomes Metro below, so its process is
+# the one to outlive. Only for a port known here; Expo's own pick isn't.
+if [ -n "$forwarded" ]; then
+  (
+    while kill -0 $$ 2>/dev/null; do
+      sleep 3
+      adb -d reverse "tcp:$forwarded" "tcp:$forwarded" || true
+    done
+  ) </dev/null >/dev/null 2>&1 &
 fi
 
 exec pnpm exec expo "$@"
