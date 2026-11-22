@@ -72,6 +72,13 @@ directory (`$TMPDIR`, falling back to `/tmp`), outside the repository.
 Tracked Markdown must contain permanent information; keep
 current-work tracking and diagnostics out of tracked Markdown files.
 
+### Seeing the app
+The React Native app can be looked at while it runs: on an Android phone
+attached by USB (`adb -d`), or on an Android emulator when no phone is
+reachable (`emulator -list-avds`). Both tools live in the Android SDK
+(`platform-tools` and `emulator` under `~/Library/Android/sdk`) and may be
+missing from `PATH`.
+
 ### Tests
 Add permanent tests only when their expected value exceeds their total cost,
 including runtime, maintenance, brittleness, and duplication. Prefer existing
