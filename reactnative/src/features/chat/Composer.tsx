@@ -20,19 +20,24 @@ import { useRecording } from "./useRecording";
 import { PhotoCamera } from "./PhotoCamera";
 import { AttachmentMenu } from "./AttachmentMenu";
 import { usePhotoAttachments } from "./usePhotoAttachments";
-import { inputIssue } from "./runtime/capability";
+import { recordingSeconds } from "./runtime/compaction";
 import type {
   AudioInput,
+  PhotoAttachment,
   PhotoInput,
   PhotoReference,
-  Message,
 } from "./storage/contracts";
-import { MAX_MESSAGE_LENGTH } from "./storage/contracts";
 import { notify } from "../../ui/notice";
 import { useColors } from "../../ui/theme";
 import { useStore } from "zustand";
-import { useChatScope, useChatModel, useChatState } from "./chatContext";
-import { openReply } from "./runtime/coordinator";
+import {
+  useChatScope,
+  useChatModel,
+  useChatState,
+  useOpenChat,
+} from "./chatContext";
+import { refusal } from "./runtime/machine";
+import type { TurnResult } from "./runtime/draft";
 import type { PersistentDraft } from "./runtime/PersistentDraft";
 import { LiveAudioWaveform, audioTime } from "./AudioWaveform";
 
@@ -51,33 +56,38 @@ function Composer({
 }) {
   const { chat: commands, connection } = useChatScope();
   const draft = useChatState((state) => state.draft);
-  const messages = useChatState((state) => state.history.messages);
-  const saving = useChatState((state) => state.saving);
-  const pending = useChatState((state) => openReply(state) !== null);
+  const busy = useChatState((state) => state.busy);
+  // What runs in the chat is stopped from here, a message waiting for room
+  // as a reply is.
+  const pending = useOpenChat((view) => refusal(view.chat, "stop") === null);
+  // The chat as the send is checked against; checks are read again when it
+  // changes.
+  const chat = useOpenChat((view) => view.chat);
   const connected = useStore(
     connection.state,
     (state) => state.status === "ready" && state.connected,
   );
   const { audioIssue, imageIssue } = useChatModel();
-  const sent = (result: boolean) => {
-    if (result) onSent();
+  const sent = (result: TurnResult) => {
+    if (result === "saved") onSent();
     return result;
   };
   return (
     <DraftComposer
       key={draft.key}
       draft={draft}
-      messages={messages}
+      sendIssue={(message) => (chat ? commands.sendIssue(message) : null)}
       onOpenPhoto={onOpenPhoto}
       audioIssue={audioIssue}
       imageIssue={imageIssue}
       active={active}
-      disabled={saving}
+      disabled={busy}
       connected={connected}
       pending={pending}
       onSendText={(text, photos) => commands.send(text, photos).then(sent)}
       onStopReply={() => {
-        void commands.stop();
+        const refused = commands.command({ kind: "stop" });
+        if (refused) notify("Couldn’t stop", refused);
       }}
       onSend={(audio) => commands.sendAudio(audio).then(sent)}
     />
@@ -144,7 +154,12 @@ function PendingControls() {
 type Props = {
   draft: PersistentDraft;
   onOpenPhoto: (reference: PhotoReference) => void;
-  messages: Message[];
+  // Why the chat wouldn't take this message now: the machine's answer.
+  sendIssue: (
+    message:
+      | { kind: "text"; text: string; photos: readonly PhotoAttachment[] }
+      | { kind: "recording"; durationMillis: number; format: string },
+  ) => string | null;
   audioIssue: string | null;
   imageIssue: string | null;
   active: boolean;
@@ -152,15 +167,15 @@ type Props = {
   // Whether a saved key is ready to send with; only sending waits for it.
   connected: boolean;
   pending: boolean;
-  onSendText: (text: string, photos: PhotoInput[]) => Promise<boolean>;
+  onSendText: (text: string, photos: PhotoInput[]) => Promise<TurnResult>;
   onStopReply: () => void;
-  onSend: (audio: AudioInput) => Promise<boolean>;
+  onSend: (audio: AudioInput) => Promise<TurnResult>;
 };
 
 function DraftComposer({
   draft,
   onOpenPhoto,
-  messages,
+  sendIssue,
   audioIssue,
   imageIssue,
   active,
@@ -172,21 +187,29 @@ function DraftComposer({
   onSend,
 }: Props) {
   const colors = useColors();
+  const { budget } = useChatModel();
   const recording = useRecording(active, onSend);
   const images = usePhotoAttachments(active, draft);
   const [menuOpen, setMenuOpen] = useState(false);
   const inputRef = useRef<TextInputInstance>(null);
+  // The field owns what is typed, and the draft only copies it. React Native
+  // hands `defaultValue` to the native field on every render, not once, so
+  // the live draft there would write the field's own text back to it a
+  // moment late, which can break a word a predictive keyboard is composing
+  // and lose keys. The field gets the draft as it was when this composer was
+  // made; a restored draft is written to it directly.
+  const [initialText] = useState(() => draft.value.text);
   const hasText = useSyncExternalStore(
     draft.subscribe,
     () => draft.value.text.trim().length > 0,
   );
   // Why the model can't take the draft as it stands, read as it is typed.
   const textIssue = useSyncExternalStore(draft.subscribe, () =>
-    inputIssue(
-      messages,
-      { kind: "text", text: draft.value.text, photos: images.photos },
-      { audio: audioIssue, image: imageIssue },
-    ),
+    sendIssue({
+      kind: "text",
+      text: draft.value.text,
+      photos: images.photos,
+    }),
   );
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -199,6 +222,12 @@ function DraftComposer({
       aliveRef.current = false;
     };
   }, []);
+  // A message given back to the draft is written to the field.
+  useEffect(
+    () =>
+      draft.onRestored((text) => inputRef.current?.setNativeProps({ text })),
+    [draft],
+  );
 
   async function run(action: () => Promise<void>) {
     if (lockRef.current) return;
@@ -226,10 +255,7 @@ function DraftComposer({
       const photos = images.photos.length ? await images.read() : [];
       if (!aliveRef.current || draft.suspended || !images.isActive()) return;
       await draft.submit(
-        async (text) => {
-          const sent = await onSendText(text, photos);
-          return sent;
-        },
+        (text) => onSendText(text, photos),
         () => {
           inputRef.current?.clear();
         },
@@ -253,11 +279,13 @@ function DraftComposer({
   const primaryIssue = pending
     ? null
     : !canSend || hasAudio
-      ? inputIssue(
-          messages,
-          { kind: "audio" },
-          { audio: audioIssue, image: imageIssue },
-        )
+      ? sendIssue({
+          kind: "recording",
+          // A recording's size is exact once its length is known.
+          durationMillis:
+            capture.clip?.durationMillis ?? capture.durationMillis,
+          format: capture.clip?.format ?? "m4a",
+        })
       : textIssue;
   async function chooseAttachment(source: "camera" | "photos" | "audio") {
     setMenuOpen(false);
@@ -280,6 +308,9 @@ function DraftComposer({
     images.picking ||
     capture.phase === "preparing" ||
     capture.phase === "sending";
+  // A send stays in progress until its message is saved, and Stop is how
+  // one that waits for room is taken back, so only `disabled` blocks Stop.
+  const primaryBlocked = pending ? disabled : blocked || !connected;
   return (
     <>
       {images.cameraOpen && active && (
@@ -374,7 +405,7 @@ function DraftComposer({
         )}
         <TextInput
           ref={inputRef}
-          defaultValue={draft.value.text}
+          defaultValue={initialText}
           editable={!draft.suspended}
           accessibilityLabel="Message"
           placeholder="Message…"
@@ -382,7 +413,6 @@ function DraftComposer({
           underlineColorAndroid="transparent"
           onChangeText={(text) => draft.edit(text)}
           multiline
-          maxLength={MAX_MESSAGE_LENGTH}
           textAlignVertical="top"
           style={[
             styles.input,
@@ -401,7 +431,7 @@ function DraftComposer({
                   : "Send message"
                 : "Record voice message"
           }
-          disabled={pending ? blocked : blocked || !connected}
+          disabled={primaryBlocked}
           accessibilityHint={primaryIssue ?? undefined}
           onPress={() => {
             if (pending) onStopReply();
@@ -409,18 +439,14 @@ function DraftComposer({
             else if (canSend) void run(send);
             else {
               Keyboard.dismiss();
-              void recording.start();
+              void recording.start(recordingSeconds(budget));
             }
           }}
           style={({ pressed }) => [
             styles.primary,
             {
               opacity:
-                blocked || (!pending && !connected) || primaryIssue
-                  ? 0.35
-                  : pressed
-                    ? 0.6
-                    : 1,
+                primaryBlocked || primaryIssue ? 0.35 : pressed ? 0.6 : 1,
             },
           ]}
         >

@@ -5,7 +5,12 @@ import { Conversation } from "./Conversation";
 import { PhotoViewer } from "./PhotoViewer";
 import { useReplySpeech } from "./useReplySpeech";
 import { useStore } from "zustand";
-import { useChatScope, useChatModel, useChatState } from "./chatContext";
+import {
+  useChatScope,
+  useChatModel,
+  useChatState,
+  useOpenChat,
+} from "./chatContext";
 import type { PhotoReference } from "./storage/contracts";
 import { Failure } from "../../ui/Failure";
 import { ChatHeader } from "../../ui/ChatHeader";
@@ -41,7 +46,7 @@ export function ChatBody({
   scrollRequest: number;
 }) {
   const { chat: commands } = useChatScope();
-  const activeId = useChatState((state) => state.history.activeId);
+  const activeId = useOpenChat((view) => view.id);
   const error = useChatState((state) => state.error);
   const model = useChatModel();
   useReplySpeech(focused && !choosingModel, activeId);

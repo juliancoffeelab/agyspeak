@@ -1,10 +1,13 @@
 // The only module application code imports from the migration boundary.
 import * as v15 from "./history/v15.ts";
+import * as v16 from "./history/v16.ts";
 
-export const HISTORY_VERSION = v15.version;
+export const HISTORY_VERSION = v16.version;
 // The rows each history table holds at the current version.
-export type HistoryRows = v15.Rows;
-export const historyRows = v15.rows;
+export type HistoryRows = v16.Rows;
+export const historyRows = v16.rows;
+// The JSON body of a stored log entry (see `entries`).
+export const historyEntry = v16.entry;
 export type HistoryStatement = v15.Statement;
 // Statements that bring the database to `version`, applied together with it.
 export type HistoryStep = {
@@ -12,9 +15,10 @@ export type HistoryStep = {
   statements: readonly HistoryStatement[];
 };
 
-// Each supported version's step to the next one, in order. None yet: the
-// baseline is the current version.
-const upgrades: HistoryStep[] = [];
+// Each supported version's step to the next one, in order.
+const upgrades: HistoryStep[] = [
+  { version: v16.version, statements: v16.upgrade },
+];
 
 // What a database needs before the app may use it: nothing at the current
 // version, the remaining steps from a supported one, and creation at the v15

@@ -16,7 +16,8 @@ export type RecordingState = {
 export type RecordingPort = {
   permission: () => Promise<boolean>;
   prepare: () => Promise<void>;
-  record: () => void;
+  // Records until stopped or for this many seconds, whichever is first.
+  record: (seconds: number) => void;
   stop: () => Promise<void>;
   status: () => {
     isRecording: boolean;
@@ -102,7 +103,7 @@ export class RecordingSession {
     }
   }
 
-  start() {
+  start(seconds: number) {
     const ticket = this.generation;
     return this.queue(async () => {
       if (!this.current(ticket) || this.state.phase !== "idle") return false;
@@ -124,7 +125,7 @@ export class RecordingSession {
       try {
         await this.port.prepare();
         if (!this.current(ticket)) return false;
-        this.port.record();
+        this.port.record(seconds);
         started = true;
         this.publish({ phase: "recording" });
         return true;

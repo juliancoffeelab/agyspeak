@@ -7,9 +7,10 @@ import {
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 import type { ConnectionState } from "../../connections/openrouter";
-import type { ChatCoordinator, ChatState } from "./runtime/coordinator";
+import type { ChatWorkspace, WorkspaceState } from "./runtime/workspace";
+import type { ChatView } from "./runtime/chatRuntime";
+import { budgetOf } from "./runtime/log";
 import { summarizeDraft, type DraftSummary } from "./storage/contracts";
-import { audioInputIssue, imageInputIssue } from "./runtime/capability";
 import type { PreferencesOwner } from "../../preferences/preferences";
 import type { AudioArbiter } from "../../device/audio";
 import type { SpeechSession } from "../../device/speech/SpeechSession";
@@ -19,7 +20,7 @@ import { useModelCatalog } from "../../providers/openrouter/hooks";
 // What the chat feature may reach: chat intentions and published chat state,
 // non-secret connection status and the default model. No credentials.
 export type ChatFeatureScope = {
-  chat: ChatCoordinator;
+  chat: ChatWorkspace;
   connection: {
     state: StoreApi<ConnectionState>;
     reload: () => Promise<void>;
@@ -53,7 +54,7 @@ const closedSubscribe = () => () => {};
 // A chat state value once the chats are open, `closed` until then. `closed`
 // and the selected value must be stable between renders.
 export function useOpenChatState<T>(
-  selector: (state: ChatState) => T,
+  selector: (state: WorkspaceState) => T,
   closed: T,
 ): T {
   const store = use(ChatScopeContext)?.chat.state;
@@ -68,7 +69,7 @@ export function useChatScope() {
   return scope;
 }
 
-export function useChatState<T>(selector: (state: ChatState) => T) {
+export function useChatState<T>(selector: (state: WorkspaceState) => T) {
   return useStore(useChatScope().chat.state, selector);
 }
 
@@ -100,32 +101,40 @@ export function useDrafted(id: string, stored: DraftSummary): boolean {
   );
 }
 
+// What the open chat shows, as its runtime publishes it.
+export function useOpenChat<T>(selector: (view: ChatView) => T): T {
+  return useStore(
+    useChatState((state) => state.open),
+    selector,
+  );
+}
+
+// A value of the open chat once the chats are open, `closed` until then.
+export function useOpenChatView<T>(
+  selector: (view: ChatView) => T,
+  closed: T,
+): T {
+  const open = useOpenChatState((state) => state.open, null);
+  return useSyncExternalStore(open?.subscribe ?? closedSubscribe, () =>
+    open ? selector(open.getState()) : closed,
+  );
+}
+
 // The header's model name, empty until the chats are open.
 export function useOpenChatModelName() {
-  const scope = use(ChatScopeContext);
-  const defaultModel = useSyncExternalStore(
-    scope?.preferences.subscribe ?? closedSubscribe,
-    () => scope?.preferences.getState().defaultModel ?? null,
-  );
-  const selected = useOpenChatState(
-    (state) => state.history.selectedModel,
-    null,
-  );
+  const model = useOpenChatView((view) => view.chat.model.id, "");
   const catalog = useModelCatalog();
-  const model = scope ? (selected ?? defaultModel ?? "") : "";
   return catalog.models.find((item) => item.id === model)?.name ?? model;
 }
 
-// The conversation's effective model and its capability feedback.
+// The open chat's model and what it can't take.
 export function useChatModel() {
-  const { preferences } = useChatScope();
-  const defaultModel = useStore(preferences, (state) => state.defaultModel);
-  const selected = useChatState((state) => state.history.selectedModel);
-  const catalog = useModelCatalog();
-  const model = selected ?? defaultModel;
+  const facts = useOpenChat((view) => view.chat.model);
   return {
-    model,
-    audioIssue: audioInputIssue(model, catalog.models),
-    imageIssue: imageInputIssue(model, catalog.models),
+    model: facts.id,
+    // What the chat's requests are sized within.
+    budget: budgetOf(facts),
+    audioIssue: facts.issues.audio,
+    imageIssue: facts.issues.image,
   };
 }

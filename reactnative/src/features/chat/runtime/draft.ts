@@ -1,3 +1,5 @@
+export type TurnResult = "refused" | "saved";
+
 export type Draft = { text: string; version: number };
 
 export function editDraft(draft: Draft, text: string) {
@@ -9,22 +11,23 @@ export function editDraft(draft: Draft, text: string) {
 // Clearing before the async save keeps native keyboard edits for the next turn.
 export async function submitDraft(
   draft: Draft,
-  save: (text: string) => Promise<boolean>,
+  save: (text: string) => Promise<TurnResult>,
   clear: () => void,
   restore: (text: string) => void,
   allowEmpty: boolean,
-) {
+): Promise<TurnResult> {
   const original = draft.text;
-  if (!original.trim() && !allowEmpty) return false;
+  if (!original.trim() && !allowEmpty) return "refused";
   editDraft(draft, "");
   const clearedVersion = draft.version;
   clear();
-  let saved = false;
+  let result: TurnResult = "refused";
   try {
-    saved = await save(original.trim());
-    return saved;
+    result = await save(original.trim());
+    return result;
   } finally {
-    if (!saved && draft.version === clearedVersion) {
+    // A saved turn consumed the text; only a refused one gives it back.
+    if (result === "refused" && draft.version === clearedVersion) {
       editDraft(draft, original);
       restore(original);
     }

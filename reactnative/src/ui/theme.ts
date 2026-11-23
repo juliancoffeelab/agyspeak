@@ -1,7 +1,7 @@
 import { createContext, use } from "react";
 import { useColorScheme } from "react-native";
 
-export const palettes = {
+export const PALETTES = {
   light: {
     background: "#faf9f6",
     surface: "#ffffff",
@@ -26,7 +26,7 @@ export const palettes = {
   },
 };
 
-export type ChatColors = typeof palettes.light;
+export type ChatColors = typeof PALETTES.light;
 
 // A surface with its own fixed background, such as the photo viewer's black,
 // provides the palette that reads on it.
@@ -36,5 +36,5 @@ export const FixedColorsContext = createContext<ChatColors | null>(null);
 export function useColors(): ChatColors {
   const fixed = use(FixedColorsContext);
   const scheme = useColorScheme();
-  return fixed ?? palettes[scheme === "dark" ? "dark" : "light"];
+  return fixed ?? PALETTES[scheme === "dark" ? "dark" : "light"];
 }

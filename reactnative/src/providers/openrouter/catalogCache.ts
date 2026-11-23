@@ -16,6 +16,8 @@ const catalogCache = z
       inputPrice: price,
       outputPrice: price,
       maxOutput: z.number().int().positive().nullable(),
+      contextLength: z.number().int().positive().nullable(),
+      aliasTarget: modelId.nullable(),
     }),
   )
   .min(1);

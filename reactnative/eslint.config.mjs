@@ -10,6 +10,7 @@ import importX from "eslint-plugin-import-x";
 import { createTypeScriptImportResolver } from "eslint-import-resolver-typescript";
 import globals from "globals";
 import tseslint from "typescript-eslint";
+import { constantCaseRule } from "./eslint-rules/constant-case.mjs";
 import { migrationBoundaryRule } from "./eslint-rules/migration-boundary.mjs";
 
 const rootDir = dirname(fileURLToPath(import.meta.url));
@@ -109,6 +110,22 @@ export default defineConfig([
           message:
             "Layout follows the keyboard through Screen (src/ui/Screen.tsx); only Keyboard.dismiss() is used directly.",
         },
+        {
+          selector:
+            "JSXOpeningElement[name.name='TextInput'] > JSXAttribute[name.name='value']",
+          message:
+            "React Native passes `value` to the native field on every render, so the app writes back what the user is typing and keys are lost. Use `defaultValue` with a text captured once, and write to the field through its ref.",
+        },
+        // A rule of thumb: a linter can't tell whether a value changes, so
+        // `defaultValue` is held to a plain name or a literal, such as one
+        // captured once with useState. It exists to catch lines like
+        // `defaultValue={draft.value.text}`, which follow the typed text.
+        {
+          selector:
+            "JSXOpeningElement[name.name='TextInput'] > JSXAttribute[name.name='defaultValue'] > JSXExpressionContainer > :not(Identifier, Literal, TemplateLiteral[expressions.length=0])",
+          message:
+            "`defaultValue` is passed to the native field on every render, not once, so it must not change with what is typed. Capture the starting text once.",
+        },
       ],
       // A layer's edges have one owner, and everything shown over the routes
       // stays in the app's window. See src/ui/Screen.tsx and
@@ -168,13 +185,43 @@ export default defineConfig([
     },
   },
   {
+    files: ["**/*.{ts,tsx,js,jsx,mjs,cjs}"],
+    plugins: {
+      local: {
+        rules: {
+          "constant-case": constantCaseRule,
+          "migration-boundary": migrationBoundaryRule,
+        },
+      },
+    },
+    rules: {
+      "local/constant-case": ["error", { allowExports: [], note: "" }],
+    },
+  },
+  {
+    files: ["tests/**"],
+    rules: {
+      "local/constant-case": [
+        "error",
+        {
+          allowExports: [],
+          note: "In tests, made-up data standing in for something real is named with a MOCK_ prefix.",
+        },
+      ],
+    },
+  },
+  {
+    // Every migration step is required to export its `version`.
+    files: ["src/migrations/history/v*.ts"],
+    rules: {
+      "local/constant-case": ["error", { allowExports: ["version"], note: "" }],
+    },
+  },
+  {
     // Every module the toolchain accepts. Frozen-fixture tests are the one
     // exception: they may import individual historical steps.
     files: ["**/*.{ts,tsx,js,jsx,mjs,cjs}"],
     ignores: ["tests/**"],
-    plugins: {
-      local: { rules: { "migration-boundary": migrationBoundaryRule } },
-    },
     rules: {
       "local/migration-boundary": [
         "error",

@@ -4,24 +4,41 @@ import { z } from "zod";
 // Provider-owned request types. Chat maps its records into these.
 export type AudioPayload = { data: string; format: string };
 export type PhotoPayload = { data: string };
+// A system message carries instructions or earlier context, as text only.
 export type ProviderMessage = {
-  role: "user" | "assistant";
+  role: "system" | "user" | "assistant";
   text: string;
   audio?: AudioPayload;
   photos?: PhotoPayload[];
 };
 export type ReplyRequest = { apiKey: string; model: string };
+// `sessionId` keeps one conversation's requests together, so OpenRouter
+// routes them to one provider and its prompt cache can be reused.
+// `maxTokens` is the most the reply may write.
+export type SessionRequest = ReplyRequest & {
+  sessionId: string;
+  maxTokens: number;
+};
+// What a reply reports about itself; each is null when it went unreported.
+// Cached tokens are prompt tokens read from the provider's prompt cache.
+export type Usage = {
+  costUSD: number | null;
+  promptTokens: number | null;
+  completionTokens: number | null;
+  cachedPromptTokens: number | null;
+  cacheWritePromptTokens: number | null;
+};
 // `stopped` is why a reply ended before the model finished it: the output
 // limit was reached, or a time limit below ran out. The text so far is kept.
 export type Completion = {
   text: string;
   model: string;
-  cost: number | null;
+  usage: Usage;
   stopped: "length" | "timeout" | null;
 };
 export type StreamReply = (
   messages: ProviderMessage[],
-  request: ReplyRequest,
+  request: SessionRequest,
   signal: AbortSignal,
   onText: (text: string) => void,
 ) => Promise<Completion>;
@@ -81,7 +98,7 @@ export function validatePhotoPayloads(photos: PhotoPayload[]) {
 // Encode an already bounded context; selection belongs to the caller.
 export function requestMessages(messages: ProviderMessage[]) {
   const result: {
-    role: "user" | "assistant";
+    role: ProviderMessage["role"];
     content:
       | string
       | (
@@ -147,7 +164,8 @@ const streamEvent = z.object({
     ]),
   ),
   model: optional(z.string()),
-  usage: optional(z.object({ cost: optional(z.number()) })),
+  // Read field by field by `reportUsage`.
+  usage: z.unknown().optional(),
   choices: optional(
     z.array(z.unknown()).transform((choices) => {
       const parsed = firstChoice.safeParse(choices[0]);
@@ -194,12 +212,60 @@ function providerError(status: number, body: unknown, apiKey: string) {
     .replace(/sk-or-[A-Za-z0-9_-]+/g, "[redacted]")
     .replace(/\s+/g, " ")
     .slice(0, 400);
-  return new Error(`${httpError(status)}${detail ? ` ${detail}` : ""}`);
+  return new ProviderError(httpError(status), detail || null);
+}
+
+// An error OpenRouter answered a request with: our sentence for it, then
+// the provider's own words, also kept apart as `providerMessage`, null when
+// it gave none.
+export class ProviderError extends Error {
+  readonly providerMessage: string | null;
+  constructor(sentence: string, providerMessage: string | null) {
+    super(
+      providerMessage === null ? sentence : `${sentence} ${providerMessage}`,
+    );
+    this.providerMessage = providerMessage;
+  }
+}
+
+const fields = (value: unknown): Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+
+// `usage` after a stream event reports `raw`: the latest report of each
+// field counts, one it leaves out keeps its value, and one that isn't a
+// token count or a cost in dollars is unknown.
+function reportUsage(usage: Usage, raw: unknown): Usage {
+  const reported = fields(raw);
+  const details = fields(reported.prompt_tokens_details);
+  const count = (previous: number | null, value: unknown) =>
+    value === undefined
+      ? previous
+      : Number.isSafeInteger(value) && (value as number) >= 0
+        ? (value as number)
+        : null;
+  const cost = reported.cost;
+  return {
+    costUSD:
+      cost === undefined
+        ? usage.costUSD
+        : typeof cost === "number" && Number.isFinite(cost) && cost >= 0
+          ? cost
+          : null,
+    promptTokens: count(usage.promptTokens, reported.prompt_tokens),
+    completionTokens: count(usage.completionTokens, reported.completion_tokens),
+    cachedPromptTokens: count(usage.cachedPromptTokens, details.cached_tokens),
+    cacheWritePromptTokens: count(
+      usage.cacheWritePromptTokens,
+      details.cache_write_tokens,
+    ),
+  };
 }
 
 export async function completeReply(
   messages: ProviderMessage[],
-  settings: ReplyRequest & { maxTokens: number },
+  settings: SessionRequest,
   signal: AbortSignal,
   onText: (text: string) => void,
   fetcher: typeof fetch,
@@ -218,7 +284,13 @@ export async function completeReply(
   let silence = setTimeout(expire, SILENCE_LIMIT_MILLIS);
   let text = "";
   let model = settings.model;
-  let cost: number | null = null;
+  let usage: Usage = {
+    costUSD: null,
+    promptTokens: null,
+    completionTokens: null,
+    cachedPromptTokens: null,
+    cacheWritePromptTokens: null,
+  };
   // A rejected request or body read is the connection failing, whatever the
   // platform calls it. An abort is our own and passes through.
   const unreachable = (cause: unknown): never => {
@@ -241,6 +313,7 @@ export async function completeReply(
         signal: controller.signal,
         body: JSON.stringify({
           model: settings.model,
+          session_id: settings.sessionId,
           messages: context,
           max_tokens: settings.maxTokens,
           stream: true,
@@ -287,8 +360,9 @@ export async function completeReply(
         if (data.error)
           throw providerError(data.error.code ?? 502, json, settings.apiKey);
         if (data.model !== undefined) model = data.model;
-        if (data.usage?.cost !== undefined && Number.isFinite(data.usage.cost))
-          cost = data.usage.cost;
+        if (data.usage !== undefined) {
+          usage = reportUsage(usage, data.usage);
+        }
         if (data.choices?.finish === "length") truncated = true;
         if (data.choices?.content) {
           text += data.choices.content;
@@ -307,9 +381,9 @@ export async function completeReply(
         parser.feed(decoder.decode(chunk.value, { stream: true }));
       }
       if (!finished) throw new Error("The response stream ended early.");
-      if (truncated) return { text, model, cost, stopped: "length" };
+      if (truncated) return { text, model, usage, stopped: "length" };
       if (!text.trim()) throw new Error("The model returned no text.");
-      return { text, model, cost, stopped: null };
+      return { text, model, usage, stopped: null };
     } finally {
       // Cancel unread bytes on Stop, parser errors, or after the terminal frame.
       await reader.cancel().catch(() => undefined);
@@ -317,7 +391,7 @@ export async function completeReply(
     }
   } catch (cause) {
     if (timedOut && !signal.aborted)
-      return { text, model, cost, stopped: "timeout" };
+      return { text, model, usage, stopped: "timeout" };
     throw cause;
   } finally {
     clearTimeout(ceiling);

@@ -9,6 +9,11 @@ export type RouterModel = {
   outputPrice: number | null;
   // The most tokens the model can write in one reply, when the catalog says.
   maxOutput: number | null;
+  // The most tokens one request to the model may hold, when the catalog says.
+  contextLength: number | null;
+  // The model this one is an alias of, which answers its requests and is
+  // named in their replies; null when it isn't an alias.
+  aliasTarget: string | null;
 };
 export type RouterUsage = {
   daily: number;
@@ -34,7 +39,7 @@ const price = z
       typeof value === "string" && value.trim() ? Number(value) : value,
     ),
   );
-const outputLimit = z
+const tokenLimit = z
   .unknown()
   .transform((value) =>
     typeof value === "number" && Number.isInteger(value) && value > 0
@@ -48,6 +53,7 @@ export const modelId = z.string().regex(/^\S+$/);
 const catalogItem = z.object({
   id: modelId,
   name: z.string(),
+  context_length: tokenLimit.optional(),
   endpoints: z.array(z.unknown()),
   architecture: z
     .object({ input_modalities: modalities, output_modalities: modalities })
@@ -58,9 +64,10 @@ const catalogItem = z.object({
     .optional()
     .catch(undefined),
   top_provider: z
-    .object({ max_completion_tokens: outputLimit })
+    .object({ max_completion_tokens: tokenLimit })
     .optional()
     .catch(undefined),
+  alias_target: z.object({ slug: modelId }).nullable().optional(),
 });
 const catalogResponse = z.object({ data: z.array(z.unknown()) });
 
@@ -81,6 +88,8 @@ export function parseModels(value: unknown): RouterModel[] {
       inputPrice: item.pricing?.prompt ?? null,
       outputPrice: item.pricing?.completion ?? null,
       maxOutput: item.top_provider?.max_completion_tokens ?? null,
+      contextLength: item.context_length ?? null,
+      aliasTarget: item.alias_target?.slug ?? null,
       id: item.id,
       name: item.name,
       image: Boolean(inputs?.includes("image")),
@@ -90,15 +99,33 @@ export function parseModels(value: unknown): RouterModel[] {
   if (!models.length) throw new Error("The model catalog is empty.");
   return models.sort((a, b) => a.name.localeCompare(b.name));
 }
-// A runaway reply stops here: about 20,000 words. A model with a smaller
-// limit of its own is asked for no more than that.
-const MAX_REPLY_TOKENS = 27_000;
+// The most one whole reply may write, its continuations included: about
+// 20,000 words, where a runaway reply ends. No request of it is asked for
+// more than is left of it, nor, with a smaller limit of its own, more than
+// the model's.
+export const MAX_REPLY_TOKENS = 27_000;
 export function replyTokenLimit(
   model: string,
   models: RouterModel[] | undefined,
 ): number {
   const own = models?.find((item) => item.id === model)?.maxOutput ?? null;
   return own === null ? MAX_REPLY_TOKENS : Math.min(own, MAX_REPLY_TOKENS);
+}
+// The most tokens one request to the model may hold, or null when the
+// catalog doesn't say or doesn't list the model.
+export function contextLength(
+  model: string,
+  models: RouterModel[] | undefined,
+): number | null {
+  return models?.find((item) => item.id === model)?.contextLength ?? null;
+}
+// The model that answers requests to `model`: the one the catalog says it
+// is an alias of, else `model` itself, as when the catalog isn't loaded.
+export function answeringModel(
+  model: string,
+  models: RouterModel[] | undefined,
+): string {
+  return models?.find((item) => item.id === model)?.aliasTarget ?? model;
 }
 // Models whose ID and name contain every search term, the current one first.
 export function matchModels(

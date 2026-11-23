@@ -1,6 +1,12 @@
 import type { PhotoAttachment, PhotoInput } from "../storage/contracts";
 
-import { editDraft, submitDraft, type Draft } from "./draft.ts";
+import {
+  editDraft,
+  submitDraft,
+  type Draft,
+  type TurnResult,
+} from "./draft.ts";
+import type { PhotoRef } from "./log.ts";
 
 // One composer session owns its native-input value and debounce timer. Writes
 // are supplied by the controller's SQLite queue, for the chat this draft
@@ -10,6 +16,8 @@ type PhotoStorage = {
   read: () => Promise<PhotoInput[]>;
   add: (photos: PhotoInput[]) => Promise<PhotoAttachment[]>;
   remove: (id: number) => Promise<PhotoAttachment[]>;
+  // Copies a message's photos in when the draft has none; its photos.
+  restore: (photos: readonly PhotoRef[]) => Promise<PhotoAttachment[]>;
 };
 export class PersistentDraft {
   readonly key: number;
@@ -20,9 +28,10 @@ export class PersistentDraft {
   private dirty = false;
   private closed = false;
   private submitting = false;
-  private clearedVersion: number | null = null;
   private pending: Promise<void> = Promise.resolve();
   private readonly listeners = new Set<() => void>();
+  // What shows the draft's text, told when the draft is given text.
+  private readonly restoredListeners = new Set<(text: string) => void>();
   private photoSnapshot: PhotoAttachment[];
   private readonly photoStorage: PhotoStorage;
   private readonly persist: (text: string) => Promise<void>;
@@ -55,17 +64,27 @@ export class PersistentDraft {
     this.listeners.forEach((listener) => listener());
   }
 
+  // Calls `listener` with the text a message given back puts in the draft.
+  onRestored(listener: (text: string) => void) {
+    this.restoredListeners.add(listener);
+    return () => {
+      this.restoredListeners.delete(listener);
+    };
+  }
+
   getPhotos = () => this.photoSnapshot;
   // A closed draft no longer owns its storage.
   readPhotos() {
     return this.closed ? Promise.resolve([]) : this.photoStorage.read();
   }
+  // The photos of a message being sent stay the draft's until it is
+  // saved, so none are added or removed meanwhile.
   async addPhotos(photos: PhotoInput[]) {
-    if (this.closed || this.suspended) return;
+    if (this.closed || this.suspended || this.submitting) return;
     this.showPhotos(await this.photoStorage.add(photos));
   }
   async removePhoto(id: number) {
-    if (this.closed || this.suspended) return;
+    if (this.closed || this.suspended || this.submitting) return;
     this.showPhotos(await this.photoStorage.remove(id));
   }
   private showPhotos(saved: PhotoAttachment[]) {
@@ -76,6 +95,26 @@ export class PersistentDraft {
   consumePhotos() {
     this.photoSnapshot = [];
     this.notify();
+  }
+
+  // A message given back (see `ChatWorkspace`): its text and photos become
+  // the draft's when nothing is typed or attached in it. What is there is
+  // kept, and the message dropped, otherwise: the two aren't merged.
+  async restore(text: string, photos: readonly PhotoRef[]) {
+    if (
+      this.closed ||
+      this.value.text.trim() !== "" ||
+      this.photoSnapshot.length > 0
+    )
+      return;
+    if (text) {
+      editDraft(this.value, text);
+      this.notify();
+      this.restoredListeners.forEach((listener) => listener(text));
+      this.dirty = true;
+      void this.flush().catch(this.onError);
+    }
+    if (photos.length) this.showPhotos(await this.photoStorage.restore(photos));
   }
 
   edit(text: string) {
@@ -97,14 +136,23 @@ export class PersistentDraft {
   get unsaved() {
     return this.dirty;
   }
+  // Whether a message submitted from the draft is still being sent.
+  get sending() {
+    return this.submitting;
+  }
+  // Saves the text, except while a message is being sent: the saved draft
+  // holds that message until its write takes it, and what is typed
+  // meanwhile is saved after.
   flush() {
-    this.cancelTimer();
-    if (
-      this.closed ||
-      !this.dirty ||
-      (this.submitting && this.value.version === this.clearedVersion)
-    )
+    if (this.submitting) {
+      this.cancelTimer();
       return this.pending;
+    }
+    return this.save();
+  }
+  private save() {
+    this.cancelTimer();
+    if (this.closed || !this.dirty) return this.pending;
     this.dirty = false;
     this.pending = this.persist(this.value.text).catch((cause) => {
       this.dirty = true;
@@ -113,20 +161,20 @@ export class PersistentDraft {
     return this.pending;
   }
   async submit(
-    save: (text: string) => Promise<boolean>,
+    save: (text: string) => Promise<TurnResult>,
     clear: () => void,
     restore: (text: string) => void,
     allowEmpty: boolean,
   ) {
-    this.cancelTimer();
+    if (this.submitting) return "refused";
     this.submitting = true;
-    this.clearedVersion = null;
     try {
+      // The saved draft holds exactly the message sent.
+      await this.save().catch(this.onError);
       return await submitDraft(
         this.value,
         save,
         () => {
-          this.clearedVersion = this.value.version;
           this.notify();
           clear();
         },
@@ -138,8 +186,8 @@ export class PersistentDraft {
       );
     } finally {
       this.submitting = false;
-      // The message transaction consumes the old draft. Preserve any text typed
-      // while it was saving, or the original text restored after a failed save.
+      // The message's write took the saved draft, or it was given back:
+      // save what the draft holds now, typed meanwhile or given back.
       this.dirty = true;
       if (!this.closed) await this.flush();
     }
@@ -149,5 +197,6 @@ export class PersistentDraft {
     this.closed = true;
     this.suspended = true;
     this.listeners.clear();
+    this.restoredListeners.clear();
   }
 }

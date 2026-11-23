@@ -3,18 +3,20 @@ import test from "node:test";
 import { PersistentDraft } from "../src/features/chat/runtime/PersistentDraft.ts";
 import {
   connect,
-  coordinator,
+  workspace,
   appendTurn,
   savedChats,
+  replies,
+  tick,
 } from "./sqlite-helper.mjs";
 
-const settings = { apiKey: "fake-never-sent", model: "test" };
 // These drafts hold text only.
 const noPhotos = {
   initial: [],
   read: async () => [],
   add: async () => [],
   remove: async () => [],
+  restore: async () => [],
 };
 
 test("typing coalesces saves; explicit flush persists the latest text without trimming", async () => {
@@ -46,7 +48,7 @@ test("typing coalesces saves; explicit flush persists the latest text without tr
   }
 });
 
-test("background flush cannot persist the optimistic Send clear before the message is saved", async () => {
+test("a send saves the message as the draft first, and nothing clears it before the message is saved", async () => {
   const writes = [];
   let finish;
   const saving = new Promise((resolve) => {
@@ -71,11 +73,11 @@ test("background flush cannot persist the optimistic Send clear before the messa
       false,
     );
     await draft.flush();
-    assert.deepEqual(writes, []);
-    finish(false);
+    assert.deepEqual(writes, ["original edited"]);
+    finish("refused");
     await sent;
     assert.equal(draft.value.text, "original edited");
-    assert.deepEqual(writes, ["original edited"]);
+    assert.deepEqual(writes, ["original edited", "original edited"]);
   } finally {
     draft.close();
   }
@@ -109,10 +111,10 @@ test("drafts stay isolated per chat, and a draft alone does not make the new cha
   const { store, sqlite } = connect();
   await store.initialize();
   await appendTurn(store, "existing", "hello", "hi", 1);
-  const controller = await coordinator({
+  const controller = await workspace({
     store,
     openAt: null,
-    settings: () => settings,
+    reply: replies().reply,
   });
   try {
     const snapshot = controller.state.getState();
@@ -150,42 +152,36 @@ test("drafts stay isolated per chat, and a draft alone does not make the new cha
   }
 });
 
-// The new chat's first send commits or fails at once, but its result is held
-// while a second send is refused and the user keeps typing. The chat keeps
-// its id either way, so what is typed meanwhile is saved to it at once and
-// survives both outcomes.
+// The new chat's first message is held while it is written, and a second
+// send is refused meanwhile. Until the write commits the saved draft holds
+// the message, so it survives a failed write; what is typed meanwhile is
+// saved once the message is, whether at once or after saving again.
 for (const kind of ["text", "audio"])
   for (const outcome of ["commit", "rollback"])
     test(`a held first ${kind} send keeps newer typing with its outcome (${outcome})`, async () => {
       const { store, sqlite, failRead } = connect();
       await store.initialize();
-      let release;
+      let release, entered;
       const held = new Promise((resolve) => (release = resolve));
-      const beginReply = store.beginReply.bind(store);
-      store.beginReply = (...args) => {
-        if (outcome === "rollback") failRead();
-        return beginReply(...args).then(
-          async (update) => {
-            await held;
-            return update;
-          },
-          async (cause) => {
-            await held;
-            throw cause;
-          },
-        );
+      const writing = new Promise((resolve) => (entered = resolve));
+      const writeLog = store.writeLog.bind(store);
+      let writes = 0;
+      store.writeLog = async (...args) => {
+        entered();
+        await held;
+        if (outcome === "rollback" && writes++ === 0) failRead();
+        return writeLog(...args);
       };
-      const controller = await coordinator({
+      const controller = await workspace({
         store,
         openAt: null,
-        settings: () => settings,
+        reply: replies().reply,
       });
       try {
         const draft = controller.state.getState().draft;
         let sending;
         if (kind === "text") {
           draft.edit("message to send");
-          await draft.flush();
           sending = draft.submit(
             (text) => controller.send(text, []),
             () => {},
@@ -195,19 +191,38 @@ for (const kind of ["text", "audio"])
         } else {
           sending = controller.sendAudio({ data: "UklGRg==", format: "wav" });
         }
+        let result = null;
+        sending.then((value) => (result = value));
+        await writing;
         // A second send is refused while the first is held.
         assert.equal(
           await (kind === "text"
             ? controller.send("refused", [])
             : controller.sendAudio({ data: "UklGRg==", format: "wav" })),
-          false,
+          "refused",
         );
+        const sent = kind === "text" ? "message to send" : "";
         draft.edit("typed while sending");
         await draft.flush();
-        assert.equal(await store.readDraft("chat"), "typed while sending");
+        assert.equal(
+          await store.readDraft("chat"),
+          kind === "text" ? sent : "typed while sending",
+        );
         draft.edit("latest");
         release();
-        assert.equal(await sending, outcome === "commit");
+        for (let turn = 0; turn < 5; turn++) await tick();
+        const phase = () =>
+          controller.state.getState().open.getState().chat.phase.kind;
+        if (outcome === "rollback") {
+          assert.equal(phase(), "unsaved");
+          assert.equal(result, null, "the send waits for its message");
+          assert.deepEqual(await savedChats(store), []);
+          if (kind === "text")
+            assert.equal(await store.readDraft("chat"), sent);
+          assert.equal(controller.command({ kind: "save-again" }), null);
+        }
+        assert.equal(await sending, "saved");
+        await tick();
         await draft.flush();
         assert.equal(
           controller.state.getState().draft,
@@ -215,44 +230,26 @@ for (const kind of ["text", "audio"])
           "the first send does not remount the composer",
         );
         assert.equal(draft.chatId, "chat");
-        assert.equal(await store.readDraft("chat"), draft.value.text);
+        assert.equal(draft.value.text, "latest");
+        assert.equal(await store.readDraft("chat"), "latest");
         assert.deepEqual(
           (await savedChats(store)).map((chat) => chat.id),
-          outcome === "commit" ? ["chat"] : [],
+          ["chat"],
         );
-        if (outcome === "commit") assert.equal(draft.value.text, "latest");
+        assert.equal(phase(), "writing");
       } finally {
         await controller.dispose();
         sqlite.close();
       }
     });
 
-test("failed message transactions preserve the saved draft, including after snapshot failure", async () => {
-  const { store, sqlite, failRead } = connect();
-  await store.initialize();
-  const { id } = await store.readNewChat();
-  await store.saveDraft(id, "original");
-  const turn = { kind: "text", text: "original", photos: [] };
-  failRead();
-  await assert.rejects(store.beginReply(id, turn, "test", 1));
-  assert.equal(await store.readDraft(id), "original");
-  assert.deepEqual(await savedChats(store), []);
-  await store.beginReply(id, turn, "test", 1);
-  assert.equal(await store.readDraft(id), "");
-  assert.deepEqual(
-    (await savedChats(store)).map((chat) => chat.id),
-    [id],
-  );
-  sqlite.close();
-});
-
 test("audio Send keeps a text draft instead of consuming it", async () => {
   const { store, sqlite } = connect();
   await store.initialize();
-  const controller = await coordinator({
+  const controller = await workspace({
     store,
     openAt: null,
-    settings: () => settings,
+    reply: replies().reply,
   });
   try {
     const draft = controller.state.getState().draft;
@@ -274,10 +271,10 @@ test("audio Send keeps a text draft instead of consuming it", async () => {
 test("failed navigation keeps the current composer and its persisted text", async () => {
   const { store, sqlite, failRead } = connect();
   await store.initialize();
-  const controller = await coordinator({
+  const controller = await workspace({
     store,
     openAt: null,
-    settings: () => settings,
+    reply: replies().reply,
   });
   try {
     const draft = controller.state.getState().draft;
@@ -298,10 +295,10 @@ test("a draft whose save fails is kept across navigation and reused on return", 
   const { store, sqlite } = connect();
   await store.initialize();
   await appendTurn(store, "existing", "hello", "hi", 1);
-  const controller = await coordinator({
+  const controller = await workspace({
     store,
     openAt: null,
-    settings: () => settings,
+    reply: replies().reply,
   });
   const save = store.saveDraft.bind(store);
   try {
@@ -313,7 +310,7 @@ test("a draft whose save fails is kept across navigation and reused on return", 
     assert.equal(await controller.select("existing"), true);
     let state = controller.state.getState();
     assert.match(state.error, /typing in that chat/);
-    assert.equal(state.history.activeId, "existing");
+    assert.equal(state.open.getState().id, "existing");
     store.saveDraft = save;
     assert.equal(await controller.select(null), true);
     state = controller.state.getState();

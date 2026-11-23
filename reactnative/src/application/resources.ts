@@ -9,7 +9,8 @@ import {
   audioInputIssue,
   imageInputIssue,
 } from "../features/chat/runtime/capability";
-import { ChatCoordinator } from "../features/chat/runtime/coordinator";
+import { loadTokenizer } from "../features/chat/runtime/compaction";
+import { ChatWorkspace } from "../features/chat/runtime/workspace";
 import { ChatRepository } from "../features/chat/storage/repository";
 import { orderedDatabase, type OrderedDatabase } from "../storage/database";
 import { createAudioArbiter, type AudioArbiter } from "../device/audio";
@@ -30,6 +31,8 @@ import {
   type PreferencesOwner,
 } from "../preferences/preferences";
 import {
+  answeringModel,
+  contextLength,
   replyTokenLimit,
   type RouterModel,
 } from "../providers/openrouter/metadata";
@@ -48,7 +51,7 @@ import { notify } from "../ui/notice";
 export type AppResources = {
   connection: OpenRouterConnection;
   preferences: PreferencesOwner;
-  chat: ChatCoordinator;
+  chat: ChatWorkspace;
   audio: AudioArbiter;
   speech: SpeechSession;
   responseSpeech: ResponseSpeech;
@@ -107,30 +110,30 @@ export async function openResources(
           .query(routerUsageQuery(credential, fetch))
           .catch(() => undefined);
     });
+    // The tokenizer loads beside the chat's storage, which sizing waits for.
+    const tokenizer = loadTokenizer();
+    // Awaited below; a storage failure first leaves it handled.
+    tokenizer.catch(() => undefined);
     const store = new ChatRepository(db, randomUUID);
     await store.initialize();
+    await tokenizer;
     const catalog = () =>
       queryClient.getQueryData<RouterModel[]>(MODEL_CATALOG_KEY);
-    const controller = new ChatCoordinator({
+    const controller = new ChatWorkspace({
       store,
       newChat: await store.readNewChat(),
       reply: (messages, request, signal, onText) =>
-        completeReply(
-          messages,
-          {
-            ...request,
-            maxTokens: replyTokenLimit(request.model, catalog()),
-          },
-          signal,
-          onText,
-          streamingFetch,
-        ),
-      settings: () => ({
-        apiKey: connection.capture()?.apiKey ?? null,
-        model: preferences.state.getState().defaultModel,
-      }),
-      audioIssue: (model) => audioInputIssue(model, catalog()),
-      imageIssue: (model) => imageInputIssue(model, catalog()),
+        completeReply(messages, request, signal, onText, streamingFetch),
+      apiKey: () => connection.capture()?.apiKey ?? null,
+      defaultModel: () => preferences.state.getState().defaultModel,
+      models: {
+        answering: (model) => answeringModel(model, catalog()),
+        contextLength: (model) => contextLength(model, catalog()),
+        maxOutput: (model) => replyTokenLimit(model, catalog()),
+        audioIssue: (model) => audioInputIssue(model, catalog()),
+        imageIssue: (model) => imageInputIssue(model, catalog()),
+      },
+      now: Date.now,
     });
     // The saved chats are listed after the new chat opens; History shows
     // their loading or failure.
@@ -163,6 +166,18 @@ export async function openResources(
     const background = AppState.addEventListener("change", (status) => {
       if (status !== "active") void controller.flushDraft();
     });
+    // What a model takes is read from the catalog, and a chat without its
+    // own model answers with the default.
+    let known = catalog();
+    const catalogLoaded = queryClient.getQueryCache().subscribe(() => {
+      if (catalog() === known) return;
+      known = catalog();
+      controller.inputsChanged();
+    });
+    const defaultModel = preferences.state.subscribe((state, previous) => {
+      if (state.defaultModel !== previous.defaultModel)
+        controller.inputsChanged();
+    });
     // Usage cached for a replaced credential is never shown again.
     const replacedKey = connection.state.subscribe(({ revision }) =>
       discardUsage(queryClient, connection.lifetime, revision),
@@ -171,6 +186,8 @@ export async function openResources(
       resources,
       async dispose() {
         background.remove();
+        catalogLoaded();
+        defaultModel();
         replacedKey();
         await speech.stop();
         try {

@@ -11,7 +11,7 @@ import {
 } from "../src/preferences/preferences.ts";
 import { connect } from "./sqlite-helper.mjs";
 
-const key = "sk-or-1111111111111111";
+const MOCK_API_KEY = "sk-or-1111111111111111";
 function stores() {
   const secrets = new Map();
   const secure = {
@@ -58,9 +58,9 @@ test("model saves never touch secure storage; key removal stays removed on reope
   const connection = createOpenRouterConnection(stores_.secure);
   await connection.read();
   const preferences = createPreferences(database.database, initial);
-  await connection.save(key);
+  await connection.save(MOCK_API_KEY);
   await preferences.saveDefaultModel("custom/model");
-  assert.deepEqual([...stores_.secrets], [[API_KEY_STORAGE_KEY, key]]);
+  assert.deepEqual([...stores_.secrets], [[API_KEY_STORAGE_KEY, MOCK_API_KEY]]);
   assert.equal((await start(stores_, database)).defaultModel, "custom/model");
   await preferences.saveDefaultModel(" ");
   await connection.save("");
@@ -73,7 +73,7 @@ test("model saves never touch secure storage; key removal stays removed on reope
 
 test("connection state publishes presence and revision, never the key", async () => {
   const stores_ = stores();
-  stores_.secrets.set(API_KEY_STORAGE_KEY, key);
+  stores_.secrets.set(API_KEY_STORAGE_KEY, MOCK_API_KEY);
   const connection = createOpenRouterConnection(stores_.secure);
   assert.deepEqual(connection.state.getState(), {
     status: "reading",
@@ -93,33 +93,37 @@ test("connection state publishes presence and revision, never the key", async ()
     connected: false,
     revision: 1,
   });
-  assert.equal(captured.apiKey, key, "an admitted request keeps its key");
+  assert.equal(
+    captured.apiKey,
+    MOCK_API_KEY,
+    "an admitted request keeps its key",
+  );
   assert.equal(connection.capture(), null);
   assert.equal(
-    JSON.stringify(connection.state.getState()).includes(key),
+    JSON.stringify(connection.state.getState()).includes(MOCK_API_KEY),
     false,
   );
 });
 
 test("an unreadable saved key is a failure, kept unchanged until read again", async () => {
   const stores_ = stores();
-  stores_.secrets.set(API_KEY_STORAGE_KEY, ` ${key}`);
+  stores_.secrets.set(API_KEY_STORAGE_KEY, ` ${MOCK_API_KEY}`);
   const connection = createOpenRouterConnection(stores_.secure);
   await connection.read();
   const failed = connection.state.getState();
   assert.equal(failed.status, "failed");
   assert.match(failed.failure.message, /invalid/);
   assert.equal(connection.capture(), null);
-  await assert.rejects(connection.save(key), /isn’t read yet/);
-  assert.equal(stores_.secrets.get(API_KEY_STORAGE_KEY), ` ${key}`);
-  stores_.secrets.set(API_KEY_STORAGE_KEY, key);
+  await assert.rejects(connection.save(MOCK_API_KEY), /isn’t read yet/);
+  assert.equal(stores_.secrets.get(API_KEY_STORAGE_KEY), ` ${MOCK_API_KEY}`);
+  stores_.secrets.set(API_KEY_STORAGE_KEY, MOCK_API_KEY);
   await connection.reload();
   assert.deepEqual(connection.state.getState(), {
     status: "ready",
     connected: true,
     revision: 0,
   });
-  assert.equal(connection.capture().apiKey, key);
+  assert.equal(connection.capture().apiKey, MOCK_API_KEY);
 });
 
 test("rapid writes remain ordered and a failed write does not block later saves", async () => {
@@ -166,9 +170,9 @@ test("rapid writes remain ordered and a failed write does not block later saves"
 
 test("invalid saved keys and preference rows block startup with their data kept", async () => {
   const invalid = stores();
-  invalid.secrets.set(API_KEY_STORAGE_KEY, ` ${key}`);
+  invalid.secrets.set(API_KEY_STORAGE_KEY, ` ${MOCK_API_KEY}`);
   await assert.rejects(start(invalid, connect()), /invalid/);
-  assert.equal(invalid.secrets.get(API_KEY_STORAGE_KEY), ` ${key}`);
+  assert.equal(invalid.secrets.get(API_KEY_STORAGE_KEY), ` ${MOCK_API_KEY}`);
 
   const damaged = connect();
   await start(stores(), damaged);
@@ -190,7 +194,7 @@ test("closing storage finishes accepted preference saves before a replacement re
     database.database.close(),
   ]);
   await assert.rejects(old.saveDefaultModel("late/model"), /closed/);
-  await assert.rejects(oldConnection.save(key), /closed/);
+  await assert.rejects(oldConnection.save(MOCK_API_KEY), /closed/);
   await Promise.all([accepted, closed]);
   assert.equal(old.state.getState().defaultModel, "accepted/model");
   assert.equal(

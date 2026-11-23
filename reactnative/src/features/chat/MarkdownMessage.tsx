@@ -14,7 +14,7 @@ function openLink({ url }: { url: string }) {
     notify("Couldn’t open this link.", null),
   );
 }
-const parserFlags = { latexMath: false };
+const MARKDOWN_PARSER_FLAGS = { latexMath: false };
 
 export const MarkdownMessage = memo(function MarkdownMessage({
   text,
@@ -91,7 +91,7 @@ export const MarkdownMessage = memo(function MarkdownMessage({
       selectable
       streamingAnimation={writing}
       enableTaskListItemToggle={false}
-      md4cFlags={parserFlags}
+      md4cFlags={MARKDOWN_PARSER_FLAGS}
       markdownStyle={markdownStyle}
       onLinkPress={openLink}
     />

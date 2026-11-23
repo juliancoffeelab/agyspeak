@@ -2,12 +2,22 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { completeReply } from "../src/providers/openrouter/transport.ts";
 
-const settings = {
+const MOCK_REQUEST_SETTINGS = {
   apiKey: "sk-or-test-never-sent",
   model: "test/model",
+  sessionId: "0b5c2f3e-8d4a-4c1e-9f7a-2e6d1b3c5a90",
   maxTokens: 27_000,
 };
-const messages = [{ id: 1, role: "user", text: "Hello", status: "complete" }];
+const UNREPORTED_USAGE = {
+  costUSD: null,
+  promptTokens: null,
+  completionTokens: null,
+  cachedPromptTokens: null,
+  cacheWritePromptTokens: null,
+};
+const MOCK_USER_MESSAGES = [
+  { id: 1, role: "user", text: "Hello", status: "complete" },
+];
 function frame(data) {
   return `data: ${JSON.stringify(data)}\r\n\r\n`;
 }
@@ -39,12 +49,17 @@ test("SSE handles byte boundaries, CRLF, comments, Unicode, reasoning, and termi
     frame(delta("å😀!")) +
     frame({
       choices: [{ delta: {}, finish_reason: "stop" }],
-      usage: { cost: 0.0002 },
+      usage: {
+        cost: 0.0002,
+        prompt_tokens: 1200,
+        completion_tokens: 3,
+        prompt_tokens_details: { cached_tokens: 1024, cache_write_tokens: 0 },
+      },
     }) +
     "data: [DONE]\r\n\r\n";
   const result = await completeReply(
-    messages,
-    settings,
+    MOCK_USER_MESSAGES,
+    MOCK_REQUEST_SETTINGS,
     new AbortController().signal,
     (text) => updates.push(text),
     async () => bytesResponse(sse),
@@ -53,7 +68,13 @@ test("SSE handles byte boundaries, CRLF, comments, Unicode, reasoning, and termi
   assert.deepEqual(result, {
     text: "Hej å😀!",
     model: "actual/model",
-    cost: 0.0002,
+    usage: {
+      costUSD: 0.0002,
+      promptTokens: 1200,
+      completionTokens: 3,
+      cachedPromptTokens: 1024,
+      cacheWritePromptTokens: 0,
+    },
     stopped: null,
   });
 });
@@ -73,8 +94,8 @@ test("text arrives before the response finishes; final metadata is consumed befo
   );
   let complete = false;
   const task = completeReply(
-    messages,
-    settings,
+    MOCK_USER_MESSAGES,
+    MOCK_REQUEST_SETTINGS,
     new AbortController().signal,
     (text) => received(text),
     async () => response,
@@ -90,7 +111,7 @@ test("text arrives before the response finishes; final metadata is consumed befo
       frame({ choices: [], usage: { cost: 0.001 } }) + "data: [DONE]\n\n",
     ),
   );
-  assert.equal((await task).cost, 0.001);
+  assert.equal((await task).usage.costUSD, 0.001);
 });
 
 test("truncated and malformed streams fail once, retaining already delivered text", async () => {
@@ -99,8 +120,8 @@ test("truncated and malformed streams fail once, retaining already delivered tex
     let calls = 0;
     await assert.rejects(
       completeReply(
-        messages,
-        settings,
+        MOCK_USER_MESSAGES,
+        MOCK_REQUEST_SETTINGS,
         new AbortController().signal,
         (text) => updates.push(text),
         async () => {
@@ -119,12 +140,15 @@ test("mid-stream provider errors are actionable and redact credentials", async (
   const sse =
     frame(delta("Partial")) +
     frame({
-      error: { code: 429, message: `Upstream rate limited ${settings.apiKey}` },
+      error: {
+        code: 429,
+        message: `Upstream rate limited ${MOCK_REQUEST_SETTINGS.apiKey}`,
+      },
     });
   await assert.rejects(
     completeReply(
-      messages,
-      settings,
+      MOCK_USER_MESSAGES,
+      MOCK_REQUEST_SETTINGS,
       new AbortController().signal,
       () => {},
       async () => bytesResponse(sse),
@@ -132,7 +156,7 @@ test("mid-stream provider errors are actionable and redact credentials", async (
     (error) => {
       assert.match(error.message, /request was rate limited/);
       assert.match(error.message, /Upstream rate limited/);
-      assert.ok(!error.message.includes(settings.apiKey));
+      assert.ok(!error.message.includes(MOCK_REQUEST_SETTINGS.apiKey));
       return true;
     },
   );
@@ -142,8 +166,8 @@ test("aborting an in-flight body stops reading and further text callbacks", asyn
   const abort = new AbortController();
   const updates = [];
   const task = completeReply(
-    messages,
-    settings,
+    MOCK_USER_MESSAGES,
+    MOCK_REQUEST_SETTINGS,
     abort.signal,
     (text) => {
       updates.push(text);
@@ -178,8 +202,8 @@ test("a reply cut off at the output limit keeps its text and says why", async ()
     frame({ choices: [{ delta: {}, finish_reason: "length" }] }) +
     "data: [DONE]\n\n";
   const result = await completeReply(
-    messages,
-    settings,
+    MOCK_USER_MESSAGES,
+    MOCK_REQUEST_SETTINGS,
     new AbortController().signal,
     () => {},
     async () => bytesResponse(sse),
@@ -187,7 +211,7 @@ test("a reply cut off at the output limit keeps its text and says why", async ()
   assert.deepEqual(result, {
     text: "Half an ans",
     model: "test/model",
-    cost: null,
+    usage: UNREPORTED_USAGE,
     stopped: "length",
   });
 });
@@ -213,8 +237,8 @@ test("silence ends a reply as timed out; stream events, not keep-alives, postpon
   t.mock.timers.enable({ apis: ["setTimeout"] });
   let stream;
   const task = completeReply(
-    messages,
-    settings,
+    MOCK_USER_MESSAGES,
+    MOCK_REQUEST_SETTINGS,
     new AbortController().signal,
     () => {},
     async (_url, options) =>
@@ -241,7 +265,7 @@ test("silence ends a reply as timed out; stream events, not keep-alives, postpon
   assert.deepEqual(await task, {
     text: "Thinking done. ",
     model: "test/model",
-    cost: null,
+    usage: UNREPORTED_USAGE,
     stopped: "timeout",
   });
 });
@@ -250,8 +274,8 @@ test("a reply that keeps streaming still ends at the overall time limit", async 
   t.mock.timers.enable({ apis: ["setTimeout"] });
   let stream;
   const task = completeReply(
-    messages,
-    settings,
+    MOCK_USER_MESSAGES,
+    MOCK_REQUEST_SETTINGS,
     new AbortController().signal,
     () => {},
     async (_url, options) =>
@@ -274,8 +298,8 @@ test("a request or body read the platform rejects is a lost connection, keeping 
   const refused = new Error("fetch failed: any platform wording");
   await assert.rejects(
     completeReply(
-      messages,
-      settings,
+      MOCK_USER_MESSAGES,
+      MOCK_REQUEST_SETTINGS,
       new AbortController().signal,
       () => {},
       async () => {
@@ -292,8 +316,8 @@ test("a request or body read the platform rejects is a lost connection, keeping 
   const updates = [];
   await assert.rejects(
     completeReply(
-      messages,
-      settings,
+      MOCK_USER_MESSAGES,
+      MOCK_REQUEST_SETTINGS,
       new AbortController().signal,
       (text) => updates.push(text),
       async () =>

@@ -41,8 +41,8 @@ test("submit clears immediately and successful save cannot erase the next draft"
   assert.equal(f.read(), "");
   assert.equal(f.draft.text, "");
   editDraft(f.draft, "Next message");
-  save.resolve(true);
-  assert.equal(await task, true);
+  save.resolve("saved");
+  assert.equal(await task, "saved");
   assert.equal(f.draft.text, "Next message");
 });
 
@@ -61,8 +61,8 @@ for (const failure of ["rejected", "thrown"]) {
       save.reject(new Error("Disk full"));
       await assert.rejects(task, /Disk full/);
     } else {
-      save.resolve(false);
-      assert.equal(await task, false);
+      save.resolve("refused");
+      assert.equal(await task, "refused");
     }
     assert.equal(f.read(), "  First message  ");
     assert.equal(f.draft.text, f.read());
@@ -81,7 +81,7 @@ test("failed save preserves a new draft, even if it was typed and deleted", asyn
   );
   editDraft(f.draft, "Next");
   editDraft(f.draft, "");
-  save.resolve(false);
+  save.resolve("refused");
   await task;
   assert.equal(f.draft.text, "");
   assert.equal(f.read(), "");
@@ -98,7 +98,7 @@ test("duplicate native change notifications do not count as user edits", async (
     false,
   );
   editDraft(f.draft, "");
-  save.resolve(false);
+  save.resolve("refused");
   await task;
   assert.equal(f.read(), "  First message  ");
 });
