@@ -109,6 +109,9 @@ const MOCK_MODELS = [
     issues: MOCK_MEDIA_TAKEN,
   },
 ];
+// The first of them in the smallest window a chat works within, where a few
+// short messages reach every line of the budget.
+const MOCK_SMALL_WINDOW = { ...MOCK_MODELS[0], contextLength: 4_000 };
 
 const WORDS = ["alpha", "beta", "gamma", "delta", "omega", "sigma"];
 // Text of at most `tokens` tokens, in paragraphs.
@@ -1198,7 +1201,7 @@ test("every ending a reply saves has its sentence", () => {
 // A reply cut at the cut line goes on until the continuation limit, ends
 // cut off, and can be continued by hand from a fresh allowance.
 test("a reply cut off at the continuation limit can be continued", () => {
-  const world = new World(MOCK_MODELS[0], 1, []);
+  const world = new World(MOCK_SMALL_WINDOW, 1, []);
   world.act({ t: "send", tokens: 50, seed: 1, photos: [] });
   const cut = { fill: 1, stopped: "length", reported: true, other: false };
   const whole = { fill: 0.5, stopped: null, reported: true, other: false };
@@ -1237,7 +1240,7 @@ test("a reply cut off at the continuation limit can be continued", () => {
 // A pass that makes room for a message keeps the latest exchange only when
 // the message has its room beside it, though the target alone would hold it.
 test("a pass before a send keeps the latest exchange only with room for the message", () => {
-  const world = new World(MOCK_MODELS[0], 1, []);
+  const world = new World(MOCK_SMALL_WINDOW, 1, []);
   const settle = () => {
     while (world.write !== null) world.act({ t: "save", ok: true });
   };
@@ -1272,7 +1275,7 @@ test("a pass before a send keeps the latest exchange only with room for the mess
 // compaction; stopped once it is made but another is needed, the message
 // is given back and the pass made is kept.
 test("a message stopped after a pass made room for it is given back, the pass kept", () => {
-  const world = new World(MOCK_MODELS[0], 1, []);
+  const world = new World(MOCK_SMALL_WINDOW, 1, []);
   const settle = () => {
     while (world.write !== null) world.act({ t: "save", ok: true });
   };

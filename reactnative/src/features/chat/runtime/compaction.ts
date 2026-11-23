@@ -4,7 +4,7 @@ import { tailStart } from "./breaks.ts";
 // hold with what it writes: the smaller of this cap and the model's context
 // window. Every share below is a percentage of it, and every request is
 // sized from above (see the estimates below), so they hold of what is sent.
-export const CONTEXT_CAP = 4_000;
+export const CONTEXT_CAP = 128_000;
 // The smallest limit a chat works within: below it, the room above the cut
 // line can't hold the compaction instruction beside the summary (checked
 // below, where the module loads).
