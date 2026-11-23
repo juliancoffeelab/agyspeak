@@ -91,6 +91,66 @@ if [ "${1:-}" = "build-apk" ] || [ "${1:-}" = "build-release" ]; then
   exit 0
 fi
 
+# Takes the dev app's chat database on the USB phone back one version, with
+# the pending step's undo or the SQL file named: a pending step that was
+# rewritten leaves that database at a shape nothing reads any more (see the
+# save-migrations skill). The database as it was stays in the folder printed.
+if [ "${1:-}" = "history-down" ]; then
+  undo=${2:-}
+  if [ -z "$undo" ]; then
+    undo=$(find src/migrations/history -name 'v*.down.sql' | sort -V | tail -n 1)
+  fi
+  if [ ! -f "$undo" ]; then
+    printf 'No undo script found; name one.\n' >&2
+    exit 1
+  fi
+  if [ "$(adb -d get-state 2>/dev/null || true)" != "device" ]; then
+    printf 'Connect exactly one USB phone and authorize USB debugging.\n' >&2
+    exit 1
+  fi
+  app=dev.agyspeak.app.dev
+  store=files/SQLite
+  kept=$(mktemp -d "${TMPDIR:-/tmp}/agyspeak-history.XXXXXX")
+  adb -d shell am force-stop "$app"
+  # The database with its write-ahead log, which holds what isn't in it yet.
+  for file in $(adb -d shell run-as "$app" ls "$store" | tr -d '\r' | grep -E '^chat-history\.db(-wal|-shm)?$'); do
+    adb -d exec-out run-as "$app" cat "$store/$file" >"$kept/$file"
+  done
+  mkdir "$kept/undone"
+  cp "$kept"/chat-history.db* "$kept/undone/"
+  from=$(sqlite3 "$kept/undone/chat-history.db" 'PRAGMA user_version')
+  # A failing statement leaves its transaction open, and so undone.
+  sqlite3 -bail "$kept/undone/chat-history.db" <"$undo" >/dev/null
+  sqlite3 "$kept/undone/chat-history.db" 'PRAGMA wal_checkpoint(TRUNCATE)' >/dev/null
+  to=$(sqlite3 "$kept/undone/chat-history.db" 'PRAGMA user_version')
+  if [ "$to" -ge "$from" ] || [ "$(sqlite3 "$kept/undone/chat-history.db" 'PRAGMA integrity_check')" != "ok" ]; then
+    printf 'The undo left version %s at %s, or a damaged database; the phone is untouched.\n' "$from" "$to" >&2
+    exit 1
+  fi
+  # Through a folder both adb and the app can reach: writing into the app's
+  # own over adb's input returns before the bytes have landed. Beside the
+  # database first, and over it only once the phone holds what was sent; the
+  # write-ahead log goes last, since until then it belongs to the old one.
+  staged=/data/local/tmp/agyspeak-history.db
+  want=$(shasum -a 256 <"$kept/undone/chat-history.db")
+  adb -d push "$kept/undone/chat-history.db" "$staged" >/dev/null
+  adb -d shell run-as "$app" cp "$staged" "$store/chat-history.db.undone" || true
+  adb -d shell rm -f "$staged"
+  if [ "$(adb -d exec-out run-as "$app" cat "$store/chat-history.db.undone" | shasum -a 256)" != "$want" ]; then
+    adb -d shell run-as "$app" rm -f "$store/chat-history.db.undone"
+    printf 'The copy did not reach the phone whole; its database is untouched.\n' >&2
+    exit 1
+  fi
+  adb -d shell run-as "$app" mv "$store/chat-history.db.undone" "$store/chat-history.db"
+  adb -d shell run-as "$app" rm -f "$store/chat-history.db-wal" "$store/chat-history.db-shm"
+  if [ "$(adb -d exec-out run-as "$app" cat "$store/chat-history.db" | shasum -a 256)" != "$want" ]; then
+    printf 'The phone does not hold what was sent. Its database as it was: %s\n' "$kept" >&2
+    exit 1
+  fi
+  printf 'Version %s -> %s with %s. As it was: %s\n' "$from" "$to" "$undo" "$kept"
+  exit 0
+fi
+
 # The forward belongs to the phone's USB session and goes whenever that is
 # reset: a cable moved, the phone waking, adb restarting. Nothing puts it
 # back, and the app then finds no Metro. Keep it up while Metro runs, for a

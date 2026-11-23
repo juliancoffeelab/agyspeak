@@ -66,6 +66,7 @@
     "android": "sh scripts/android.sh run:android --app-id dev.agyspeak.app.dev",
     "android:release": "sh scripts/android.sh run:android --variant release --app-id dev.agyspeak.app",
     "android:usb": "sh scripts/android.sh install-release",
+    "history:down": "sh scripts/android.sh history-down",
     "build:apk": "sh scripts/android.sh build-apk",
     "build:release": "sh scripts/android.sh build-release",
     "prebuild": "sh scripts/android.sh prebuild --platform android",

@@ -35,10 +35,21 @@ changes it took to get there.
 - **Freezing.** A version freezes when it merges to `main` or a release build
   containing it is installed, whichever comes first. A frozen module and its
   step are never edited again.
-- **Pending databases are disposable.** After the pending step changes, a dev
-  database already stamped with its version holds an outdated schema. Restore
-  the copy from before the upgrade, `chat-history.db.before-upgrade` beside
-  the database, and run the step again.
+- **Undo.** The pending step keeps its undo beside it,
+  `src/migrations/history/vN.down.sql`: plain SQL that takes a database at N
+  back to the schema of N-1 and sets `user_version`, opening with what it
+  cannot bring back. It is development tooling, which the app never loads.
+  The change that adds version N+1 deletes it.
+- **Changing the pending step.** A dev database stamped with the pending
+  version holds the step's earlier shape once the step changes. Take it back
+  first, with the undo as it stands: `pnpm history:down` applies it to the
+  USB phone's dev database and prints where it kept the original. Then
+  change the step and its undo together. For a database left at a shape the
+  undo no longer matches, apply that shape's undo from git:
+  `git show <commit>:reactnative/src/migrations/history/vN.down.sql`, saved
+  to a file and named to `pnpm history:down`. With no undo for its shape,
+  restore `chat-history.db.before-upgrade` beside the database, which loses
+  what was written since.
 - **Merge check.** `git diff --name-status <base> -- reactnative/src/migrations/history`
   shows one added version module at most.
 
@@ -125,16 +136,17 @@ conversion.
    `files/SQLite/chat-history.db*`, with `adb exec-out run-as <package> cat`.
    A running dev client reloads on save and applies the new chain to its
    database at once.
-3. Add the pending version module and its step and register it in `upgrades`,
-   or edit the pending one this branch already has, and move
-   application queries to the new schema. Write its SQL by
+3. Add the pending version module, its step and its undo and register the
+   step in `upgrades`, or edit the pending ones this branch already has, and
+   move application queries to the new schema. Write its SQL by
    [SQLite integration](references/sqlite.md) and its section in version
    history. Keep storage I/O outside the boundary.
 4. Verify offline through the real runner (`tests/sqlite-helper.mjs`): the
    upgrade from the baseline fixture with its declared change, fresh creation
    matching the upgraded schema, the current version opening unchanged,
-   unsupported and future versions rejected unchanged, and a failing step
-   rolling back.
+   unsupported and future versions rejected unchanged, a failing step
+   rolling back, and the undo returning the upgraded fixture to the baseline
+   schema with only the losses it declares.
 5. Run `pnpm typecheck`, `pnpm exec eslint .`, `pnpm exec prettier --check .`
    and `pnpm test` after inspecting them for paid requests. Use in-memory or
    system-temp databases, never the user's live database or SecureStore.
