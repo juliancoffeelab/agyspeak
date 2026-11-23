@@ -93,7 +93,7 @@ export function SpeechLanguagePicker({
           placeholderTextColor={colors.muted}
           autoCapitalize="none"
           autoCorrect={false}
-          value={search}
+          // The field owns its text; the search only follows it.
           onChangeText={setSearch}
           style={[
             styles.search,

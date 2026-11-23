@@ -1,5 +1,4 @@
 import type { RouterModel } from "../../../providers/openrouter/metadata";
-import { selectContext, type ContextEntry } from "./context.ts";
 
 // Why a model can't take one kind of input, or null. A missing catalog entry
 // is unknown, not evidence that the input is supported.
@@ -24,32 +23,25 @@ export const imageInputIssue = (
   models: RouterModel[] | undefined,
 ) => supportIssue(modelId, models, "image");
 
-// What is about to be added to the stored messages: words with any photos,
-// a recording, or nothing when a reply is asked for again.
-export type Outgoing =
-  | { kind: "text"; text: string; photos: NonNullable<ContextEntry["photos"]> }
-  | { kind: "audio" }
-  | null;
+// What the model lacks that a request may carry: why it can't take audio,
+// and why it can't take photos, each null when it takes them.
+export type InputIssues = { audio: string | null; image: string | null };
 
-// Why the model can't take this conversation, or null. `issues` is what the
-// model lacks; an input counts only while it is still in the context that
-// would be sent.
-export function inputIssue(
-  messages: ContextEntry[],
-  outgoing: Outgoing,
-  issues: { audio: string | null; image: string | null },
-): string | null {
-  if (issues.audio === null && issues.image === null) return null;
-  const text = outgoing?.kind === "text" ? outgoing.text.trim() : "";
-  const photos = outgoing?.kind === "text" ? outgoing.photos : [];
-  const context = selectContext(
-    text || photos.length
-      ? [...messages, { role: "user", text, photos, status: "complete" }]
-      : messages,
+// Why the model can't take this request, which message carries what it
+// can't take and of which kind, or null: the provider messages exactly as
+// they are sent, after whoever built them applied the summary and the media
+// budget.
+export function requestIssue(
+  messages: readonly { audio?: unknown; photos?: readonly unknown[] }[],
+  issues: InputIssues,
+): { reason: string; message: number; input: "audio" | "image" } | null {
+  const audio = messages.findIndex((message) => message.audio !== undefined);
+  if (audio !== -1 && issues.audio !== null)
+    return { reason: issues.audio, message: audio, input: "audio" };
+  const image = messages.findIndex(
+    (message) => (message.photos?.length ?? 0) > 0,
   );
-  const audio =
-    outgoing?.kind === "audio" || context.some((message) => message.audio);
-  const image =
-    photos.length > 0 || context.some((message) => message.photos?.length);
-  return (audio ? issues.audio : null) ?? (image ? issues.image : null);
+  if (image !== -1 && issues.image !== null)
+    return { reason: issues.image, message: image, input: "image" };
+  return null;
 }

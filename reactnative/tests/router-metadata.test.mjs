@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  answeringModel,
   matchModels,
   modelPrice,
   parseModels,
@@ -193,4 +194,39 @@ test("a reply is asked for our limit, or the model's own when that is smaller", 
   assert.equal(replyTokenLimit("absent", models), 27_000);
   assert.equal(replyTokenLimit("custom/unlisted", models), 27_000);
   assert.equal(replyTokenLimit("big", undefined), 27_000);
+});
+
+test("an alias is answered by the model it points at; any other model by itself", () => {
+  const entry = (id, alias_target) => ({
+    id,
+    name: id,
+    endpoints: ["/api/v1/chat/completions"],
+    alias_target,
+  });
+  const models = parseModels({
+    data: [
+      entry("~vendor/model-latest", { slug: "vendor/model-2" }),
+      entry("vendor/model-2", null),
+      entry("vendor/plain", undefined),
+      entry("~vendor/broken", { slug: "" }),
+    ],
+  });
+  assert.deepEqual(
+    models.map((model) => [model.id, model.aliasTarget]),
+    [
+      ["~vendor/model-latest", "vendor/model-2"],
+      ["vendor/model-2", null],
+      ["vendor/plain", null],
+    ],
+  );
+  assert.equal(
+    answeringModel("~vendor/model-latest", models),
+    "vendor/model-2",
+  );
+  assert.equal(answeringModel("vendor/plain", models), "vendor/plain");
+  assert.equal(answeringModel("custom/unlisted", models), "custom/unlisted");
+  assert.equal(
+    answeringModel("~vendor/model-latest", undefined),
+    "~vendor/model-latest",
+  );
 });

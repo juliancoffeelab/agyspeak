@@ -54,7 +54,7 @@ for (const stage of ["permission", "prepare"]) {
         return true;
       },
     });
-    const starting = session.start();
+    const starting = session.start(60);
     await entered.promise;
     session.setActive(false);
     session.setActive(true);
@@ -68,7 +68,7 @@ for (const stage of ["permission", "prepare"]) {
 
 test("backgrounding stops capture and preserves duration, levels, and a ready clip", async () => {
   const { native, session } = setup();
-  await session.start();
+  await session.start(60);
   native.duration = 2300;
   session.sample();
   const ready = deferred();
@@ -94,7 +94,7 @@ test("backgrounding stops capture and preserves duration, levels, and a ready cl
 
 test("hiding during audio reading aborts submission and retains the unsent clip", async () => {
   const { session } = setup();
-  await session.start();
+  await session.start(60);
   const entered = deferred(),
     gate = deferred();
   let signal;
@@ -133,7 +133,7 @@ test("a picker result arriving after navigation is discarded without sending", a
 
 test("failed submission keeps the recording available for an explicit retry", async () => {
   const { native, session } = setup();
-  await session.start();
+  await session.start(60);
   assert.equal(await session.send(async () => false), false);
   assert.equal(session.getSnapshot().phase, "ready");
   assert.deepEqual(native.removed, []);
@@ -143,7 +143,7 @@ test("failed submission keeps the recording available for an explicit retry", as
 
 test("automatic native stop retains the last measured duration when the SDK resets it", async () => {
   const { native, session } = setup();
-  await session.start();
+  await session.start(60);
   native.duration = 119900;
   session.sample();
   native.recording = false;
@@ -168,7 +168,7 @@ test("discard during preparation prevents capture and cleans the prepared file",
       await gate.promise;
     },
   });
-  const starting = session.start();
+  const starting = session.start(60);
   await entered.promise;
   const discarding = session.discard();
   gate.resolve();
@@ -192,7 +192,7 @@ test("navigation during native stop prevents the pending send", async () => {
   });
   native = setupResult.native;
   const { session } = setupResult;
-  await session.start();
+  await session.start(60);
   let submissions = 0;
   const sending = session.send(async () => {
     submissions++;
@@ -219,14 +219,14 @@ test("a replacement session waits for the replaced capture's native stop", async
       old.native.recording = false;
     },
   });
-  await old.session.start();
+  await old.session.start(60);
   // Switching chats remounts the composer: the old session is torn down.
   old.session.setActive(false);
   void old.session.discard();
   await entered.promise;
   let prepared = 0;
   const next = setup({ audio, prepare: async () => void prepared++ });
-  const starting = next.session.start();
+  const starting = next.session.start(60);
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(prepared, 0, "the new capture waits for the old stop");
   assert.equal(audio.holds(), true, "read-aloud stays blocked");

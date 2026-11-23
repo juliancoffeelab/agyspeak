@@ -91,7 +91,7 @@ export function ModelPicker({
           accessibilityLabel="Search models"
           placeholder="Search models"
           placeholderTextColor={colors.muted}
-          value={search}
+          // The field owns its text; the search only follows it.
           onChangeText={setSearch}
           editable={!saving}
           autoCapitalize="none"

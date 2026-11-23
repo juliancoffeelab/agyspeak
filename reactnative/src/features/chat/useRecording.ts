@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { AppState } from "react-native";
 import {
-  RecordingPresets,
+  AudioQuality,
+  IOSOutputFormat,
   getRecordingPermissionsAsync,
   requestRecordingPermissionsAsync,
   setAudioModeAsync,
@@ -11,6 +12,7 @@ import { getDocumentAsync } from "expo-document-picker";
 import { File } from "expo-file-system";
 
 import { useChatScope } from "./chatContext";
+import type { TurnResult } from "./runtime/draft";
 import { removeFile } from "../../device/files";
 import type { AudioInput } from "./storage/contracts";
 import {
@@ -23,15 +25,34 @@ import {
   type RecordingClip,
 } from "../../device/recording/RecordingSession";
 
+// A recording stops by itself at this, or sooner at the chat's message
+// share. Ten minutes at the bitrate below is about 3.6 MB.
+const MAX_RECORDING_SECONDS = 600;
+
+// Speech: mono AAC in M4A at 48 kbit/s.
+const RECORDING_OPTIONS = {
+  extension: ".m4a",
+  sampleRate: 44_100,
+  numberOfChannels: 1,
+  bitRate: 48_000,
+  android: { outputFormat: "mpeg4", audioEncoder: "aac" },
+  ios: {
+    outputFormat: IOSOutputFormat.MPEG4AAC,
+    audioQuality: AudioQuality.MAX,
+    linearPCMBitDepth: 16,
+    linearPCMIsBigEndian: false,
+    linearPCMIsFloat: false,
+  },
+  web: { mimeType: "audio/webm", bitsPerSecond: 48_000 },
+  isMeteringEnabled: true,
+} as const;
+
 export function useRecording(
   active: boolean,
-  submit: (audio: AudioInput) => Promise<boolean>,
+  submit: (audio: AudioInput) => Promise<TurnResult>,
 ) {
   const { speech: replySpeech, audio } = useChatScope();
-  const recorder = useAudioRecorder({
-    ...RecordingPresets.HIGH_QUALITY,
-    isMeteringEnabled: true,
-  });
+  const recorder = useAudioRecorder(RECORDING_OPTIONS);
   const session = useMemo(
     () =>
       new RecordingSession({
@@ -47,7 +68,7 @@ export function useRecording(
           });
           await recorder.prepareToRecordAsync();
         },
-        record: () => recorder.record({ forDuration: 120 }),
+        record: (seconds) => recorder.record({ forDuration: seconds }),
         stop: async () => {
           try {
             await recorder.stop();
@@ -99,12 +120,13 @@ export function useRecording(
         );
       const data = await file.base64();
       if (signal.aborted) return false;
-      return submit({
+      const result = await submit({
         data,
         format: clip.format,
         durationMillis: clip.durationMillis,
         levels: clip.levels,
       });
+      return result === "saved";
     });
   }
   async function attach() {
@@ -136,7 +158,10 @@ export function useRecording(
   }
   return {
     state,
-    start: () => session.start(),
+    // The recording stops by itself after the given seconds, or at the
+    // longest recording allowed when that is shorter.
+    start: (seconds: number) =>
+      session.start(Math.min(MAX_RECORDING_SECONDS, seconds)),
     discard: () => session.discard(),
     send,
     attach,

@@ -109,6 +109,22 @@ export default defineConfig([
           message:
             "Layout follows the keyboard through Screen (src/ui/Screen.tsx); only Keyboard.dismiss() is used directly.",
         },
+        {
+          selector:
+            "JSXOpeningElement[name.name='TextInput'] > JSXAttribute[name.name='value']",
+          message:
+            "React Native passes `value` to the native field on every render, so the app writes back what the user is typing and keys are lost. Use `defaultValue` with a text captured once, and write to the field through its ref.",
+        },
+        // A rule of thumb: a linter can't tell whether a value changes, so
+        // `defaultValue` is held to a plain name or a literal, such as one
+        // captured once with useState. It exists to catch lines like
+        // `defaultValue={draft.value.text}`, which follow the typed text.
+        {
+          selector:
+            "JSXOpeningElement[name.name='TextInput'] > JSXAttribute[name.name='defaultValue'] > JSXExpressionContainer > :not(Identifier, Literal, TemplateLiteral[expressions.length=0])",
+          message:
+            "`defaultValue` is passed to the native field on every render, not once, so it must not change with what is typed. Capture the starting text once.",
+        },
       ],
       // A layer's edges have one owner, and everything shown over the routes
       // stays in the app's window. See src/ui/Screen.tsx and

@@ -34,15 +34,17 @@ import { useColors } from "./theme";
 type OverlayProps = {
   // `center` is a card and `bottom` a sheet, both over a dimmed backdrop
   // that closes them. `fill` is the whole screen, laid out by its own
-  // `Screen`.
-  placement: "center" | "bottom" | "fill";
+  // `Screen`. `popover` is a small card its owner places, with nothing dimmed;
+  // it appears and goes at once, where the others fade.
+  placement: "center" | "bottom" | "fill" | "popover";
   // What the backdrop says it does, for screen readers.
   closeLabel: string;
   // Closing by the backdrop or the back button.
   onClose: () => void;
   children: ReactNode;
 };
-// A closing entry fades out before it is removed.
+// A closing entry fades out before it is removed; a popover is removed at
+// once.
 type Entry = OverlayProps & { id: string; closing: boolean };
 
 const HostContext = createContext<{
@@ -68,8 +70,12 @@ export function OverlayHost({ children }: { children: ReactNode }) {
       },
       hide: (id: string) => {
         setEntries((current) =>
-          current.map((entry) =>
-            entry.id === id ? { ...entry, closing: true } : entry,
+          current.flatMap((entry) =>
+            entry.id !== id
+              ? [entry]
+              : entry.placement === "popover"
+                ? []
+                : [{ ...entry, closing: true }],
           ),
         );
         setTimeout(
@@ -119,10 +125,11 @@ function Shown({ entry, top }: { entry: Entry; top: boolean }) {
   const close = useEffectEvent(() => entry.onClose());
   useEffect(() => Keyboard.dismiss(), []);
   const { closing } = entry;
-  const opacity = useSharedValue(0);
+  const fades = entry.placement !== "popover";
+  const opacity = useSharedValue(fades ? 0 : 1);
   useEffect(() => {
-    opacity.set(withTiming(closing ? 0 : 1, { duration: FADE_MS }));
-  }, [closing, opacity]);
+    if (fades) opacity.set(withTiming(closing ? 0 : 1, { duration: FADE_MS }));
+  }, [closing, fades, opacity]);
   const fade = useAnimatedStyle(() => ({ opacity: opacity.get() }));
   useEffect(() => {
     if (!top) return;
@@ -150,7 +157,7 @@ function Shown({ entry, top }: { entry: Entry; top: boolean }) {
       style={[StyleSheet.absoluteFill, fade]}
     >
       <OverlayTopContext value={top}>
-        {entry.placement === "fill" ? (
+        {entry.placement === "fill" || entry.placement === "popover" ? (
           entry.children
         ) : entry.placement === "center" ? (
           <Screen keyboard="pad" background={SCRIM}>

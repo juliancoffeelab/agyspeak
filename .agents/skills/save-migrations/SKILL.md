@@ -95,6 +95,12 @@ it. Each step is tested by upgrading that fixture and comparing every table with
 fixture after applying only the step's declared change, and by parsing every
 stored row with `historyRows[table].strict()`.
 
+The durable format holds the conversation and what the model was given.
+Diagnostics, such as why a request failed, live in memory or a disposable
+cache, and a saved reason is a code, never the sentence shown for it: a
+change to how failures are represented or worded is then not a change of
+format.
+
 Changes to application types, defaults, model catalogs or validators must not
 alter historical interpretation. Preserve durable messages, audio/photo bytes
 and references, drafts, model selections and credentials. Define necessary

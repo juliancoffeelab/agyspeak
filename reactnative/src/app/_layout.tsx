@@ -53,7 +53,7 @@ function Root() {
         <OverlayHost>
           <Stack screenOptions={{ headerShown: false }}>
             {/* The one chat destination, with History beside it; the
-                coordinator owns which chat it shows. */}
+                workspace owns which chat it shows. */}
             <Stack.Screen name="index" />
             <Stack.Screen name="settings" options={overChat} />
           </Stack>

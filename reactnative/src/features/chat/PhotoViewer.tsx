@@ -28,7 +28,11 @@ export function PhotoViewer({
   onClose: () => void;
 }) {
   const photo = useQuery({
-    queryKey: ["photo", reference.draft, reference.id],
+    queryKey: [
+      "photo",
+      reference.draft ? reference.id : reference.key,
+      reference.draft,
+    ],
     queryFn: () => load(reference),
     staleTime: Infinity,
     gcTime: 0,

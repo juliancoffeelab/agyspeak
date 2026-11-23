@@ -12,14 +12,14 @@ type ResponseSpeechPorts = {
 };
 
 // Reading responses aloud: what is spoken and in which language. Playback
-// itself is the device session's; a response is keyed by its message id.
+// itself is the device session's; a response is keyed by its chat and place.
 export function createResponseSpeech(ports: ResponseSpeechPorts) {
-  const languages = createStore<ReadonlyMap<number, SpeechLanguage>>()(
+  const languages = createStore<ReadonlyMap<string, SpeechLanguage>>()(
     () => new Map(),
   );
   return {
     languages,
-    toggle(messageId: number, markdown: string) {
+    toggle(messageId: string, markdown: string) {
       const { speech } = ports;
       if (speech.getSnapshot().playing === messageId) return speech.stop();
       const prose = markdownToSpeechText(markdown);
@@ -35,7 +35,7 @@ export function createResponseSpeech(ports: ResponseSpeechPorts) {
     },
     // A new choice applies from the next reading; the current one stops.
     // Null returns the response to the saved default.
-    setLanguage(messageId: number, language: SpeechLanguage | null) {
+    setLanguage(messageId: string, language: SpeechLanguage | null) {
       const next = new Map(languages.getState());
       if (language !== null) next.set(messageId, language);
       else next.delete(messageId);

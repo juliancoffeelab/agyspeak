@@ -18,7 +18,7 @@ export class SpeechUnavailableError extends Error {}
 // caller's key for the utterance in progress, so callers can show it.
 export class SpeechSession {
   private readonly port: SpeechPort;
-  private state: { playing: number | null; recording: boolean } = {
+  private state: { playing: string | null; recording: boolean } = {
     playing: null,
     recording: false,
   };
@@ -84,7 +84,7 @@ export class SpeechSession {
     }
   }
   // Replaces whatever is playing. Nothing starts while recording.
-  async play(key: number, prose: string, language: SpeechLanguage | null) {
+  async play(key: string, prose: string, language: SpeechLanguage | null) {
     if (this.state.recording) return;
     const generation = ++this.generation;
     this.publish({ playing: key });

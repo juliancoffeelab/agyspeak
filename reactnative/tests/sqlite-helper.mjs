@@ -2,13 +2,20 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { ChatCoordinator } from "../src/features/chat/runtime/coordinator.ts";
+import {
+  CONTEXT_FLOOR,
+  loadTokenizer,
+} from "../src/features/chat/runtime/compaction.ts";
+import { ChatWorkspace } from "../src/features/chat/runtime/workspace.ts";
 import { ChatRepository } from "../src/features/chat/storage/repository.ts";
 import { orderedDatabase } from "../src/storage/database.ts";
 import { openHistory } from "../src/storage/historyMigration.ts";
 
+// The app loads it with a chat's resources.
+await loadTokenizer();
+
 // Where the copies made before upgrades go; removed when the tests exit.
-const backups = mkdtempSync(join(tmpdir(), "agyspeak-backups-"));
+export const backups = mkdtempSync(join(tmpdir(), "agyspeak-backups-"));
 process.on("exit", () => rmSync(backups, { recursive: true, force: true }));
 let made = 0;
 const backupPath = () => join(backups, `${made++}.db`);
@@ -56,15 +63,21 @@ export function connect(
   const db = {
     closeAsync: async () => {},
     execAsync: async (sql) => sqlite.exec(sql),
-    getFirstAsync: async (sql, ...args) =>
-      sqlite.prepare(sql).get(...args) ?? null,
+    // Rows are plain objects, as Expo's are.
+    getFirstAsync: async (sql, ...args) => {
+      const row = sqlite.prepare(sql).get(...args);
+      return row ? { ...row } : null;
+    },
     getAllAsync: async (sql, ...args) => {
       queries.push({ sql, args });
       if (failNextRead) {
         failNextRead = false;
         throw new Error("Simulated snapshot read failure");
       }
-      return sqlite.prepare(sql).all(...args);
+      return sqlite
+        .prepare(sql)
+        .all(...args)
+        .map((row) => ({ ...row }));
     },
     runAsync: async (sql, ...args) => {
       const result = sqlite.prepare(sql).run(...args);
@@ -101,21 +114,34 @@ export function connect(
   };
 }
 
+// Appends a sent message and its complete reply to chat `id`, made when
+// it doesn't exist yet.
 export async function appendTurn(store, id, text, reply, now) {
   await store.seedChat(id);
-  const pending = await store.beginReply(
+  const { chat } = await store.activate(id);
+  return store.writeLog(
     id,
-    { kind: "text", text: text, photos: [] },
+    chat.log.length,
+    [
+      { kind: "user", text, audio: null, photos: [], postedAt: now },
+      {
+        kind: "reply",
+        status: "complete",
+        text: reply,
+        ending: null,
+        providerMessage: null,
+        model: null,
+        usage: null,
+        maxTokens: null,
+        compaction: null,
+        postedAt: now,
+        elapsedMillis: null,
+      },
+    ],
+    null,
     "test/model",
     now,
   );
-  return store.finishReply(pending.replyId, {
-    status: "complete",
-    text: reply,
-    error: null,
-    model: null,
-    elapsedMillis: null,
-  });
 }
 
 // Startup history opened at an explicit chat, rather than at the new chat.
@@ -124,7 +150,7 @@ export async function startAt(store, id) {
   return {
     chats: chats.filter((listed) => listed.title !== null),
     activeId: chat.id,
-    messages: chat.messages,
+    log: chat.log,
     selectedModel: chat.selectedModel,
   };
 }
@@ -140,7 +166,7 @@ export async function readHistory(store) {
   return {
     chats: await savedChats(store),
     activeId: id,
-    messages: [],
+    log: [],
     selectedModel,
   };
 }
@@ -160,17 +186,68 @@ export async function latestId(store) {
 // Node has no display: a frame is the next turn of its event loop.
 globalThis.requestAnimationFrame = (run) => setTimeout(run, 0);
 
-// A coordinator started as the app starts it, on the new chat with the saved
+// A workspace started as the app starts it, on the new chat with the saved
 // chats listed, then opened at `openAt`. A test names only what it is about.
-export async function coordinator({ openAt, ...options }) {
-  const controller = new ChatCoordinator({
-    newChat: await options.store.readNewChat(),
+export async function workspace({ openAt, store, models, ...options }) {
+  const opened = new ChatWorkspace({
+    store,
+    newChat: await store.readNewChat(),
     reply: () => new Promise(() => {}),
-    audioIssue: () => null,
-    imageIssue: () => null,
+    apiKey: () => "test-key",
+    defaultModel: () => "test/model",
+    now: Date.now,
     ...options,
+    models: {
+      // A model with the smallest window a chat works within, so a test runs
+      // at the size it was written for whatever the cap is.
+      contextLength: () => CONTEXT_FLOOR,
+      maxOutput: () => 1_000_000,
+      // Nor an alias: it answers as itself.
+      answering: (model) => model,
+      audioIssue: () => null,
+      imageIssue: () => null,
+      ...models,
+    },
   });
-  await controller.loadChats();
-  if (openAt !== null) await controller.select(openAt);
-  return controller;
+  await opened.loadChats();
+  if (openAt !== null) await opened.select(openAt);
+  return opened;
 }
+
+// Usage a mocked reply reports: none.
+export const NO_USAGE = {
+  costUSD: null,
+  promptTokens: null,
+  completionTokens: null,
+  cachedPromptTokens: null,
+  cacheWritePromptTokens: null,
+};
+
+// A reply port whose requests wait until a test answers or fails them. A
+// stopped request is rejected as the transport rejects it.
+export function replies() {
+  const requests = [];
+  const reply = (messages, settings, signal, onText) =>
+    new Promise((resolve, reject) => {
+      signal.addEventListener("abort", () =>
+        reject(new DOMException("Aborted", "AbortError")),
+      );
+      requests.push({
+        messages,
+        settings,
+        signal,
+        onText,
+        answer: (text, model = settings.model, stopped = null) =>
+          resolve({ text, model, usage: NO_USAGE, stopped }),
+        fail: reject,
+      });
+    });
+  return { reply, requests };
+}
+
+// What runs after a settled promise has.
+export const tick = () => new Promise((resolve) => setImmediate(resolve));
+
+// The open chat's machine state.
+export const openChat = (workspace) =>
+  workspace.state.getState().open.getState().chat;

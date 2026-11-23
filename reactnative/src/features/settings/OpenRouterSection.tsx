@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useStore } from "zustand";
 import * as Clipboard from "expo-clipboard";
 import RefreshCw from "lucide-react-native/icons/refresh-cw";
@@ -9,6 +9,7 @@ import {
   Text,
   TextInput,
   View,
+  type TextInputInstance,
 } from "react-native";
 import { KeyScanner } from "./KeyScanner";
 import { dollars } from "../../providers/openrouter/metadata";
@@ -74,6 +75,13 @@ function KeyEditor({
   useStore(connection.state);
   const savedKey = ready ? connection.readForEditing() : "";
   const [apiKey, setApiKey] = useState(savedKey);
+  // The field owns what is typed, and `apiKey` only copies it: React Native
+  // hands a field's `value` and `defaultValue` to it on every render, so a
+  // changing one writes the text back while it is typed and loses keys. The
+  // field starts from the key as this editor first read it, and a key put in
+  // it later is written to it directly.
+  const [initialKey] = useState(savedKey);
+  const inputRef = useRef<TextInputInstance>(null);
   const [saving, setSaving] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [keyError, setKeyError] = useState<string | null>(null);
@@ -92,6 +100,7 @@ function KeyEditor({
 
   function acceptKey(key: string) {
     setApiKey(key);
+    inputRef.current?.setNativeProps({ text: key });
     setKeyError(null);
   }
   async function paste() {
@@ -202,8 +211,9 @@ function KeyEditor({
         </Text>
       </View>
       <TextInput
+        ref={inputRef}
         accessibilityLabel="OpenRouter API key"
-        value={apiKey}
+        defaultValue={initialKey}
         onChangeText={(value) => {
           setApiKey(value);
           setKeyError(null);

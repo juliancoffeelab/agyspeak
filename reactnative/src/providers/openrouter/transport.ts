@@ -4,8 +4,9 @@ import { z } from "zod";
 // Provider-owned request types. Chat maps its records into these.
 export type AudioPayload = { data: string; format: string };
 export type PhotoPayload = { data: string };
+// A system message carries instructions or earlier context, as text only.
 export type ProviderMessage = {
-  role: "user" | "assistant";
+  role: "system" | "user" | "assistant";
   text: string;
   audio?: AudioPayload;
   photos?: PhotoPayload[];
@@ -13,7 +14,11 @@ export type ProviderMessage = {
 export type ReplyRequest = { apiKey: string; model: string };
 // `sessionId` keeps one conversation's requests together, so OpenRouter
 // routes them to one provider and its prompt cache can be reused.
-export type SessionRequest = ReplyRequest & { sessionId: string };
+// `maxTokens` is the most the reply may write.
+export type SessionRequest = ReplyRequest & {
+  sessionId: string;
+  maxTokens: number;
+};
 // What a reply reports about itself; each is null when it went unreported.
 // Cached tokens are prompt tokens read from the provider's prompt cache.
 export type Usage = {
@@ -93,7 +98,7 @@ export function validatePhotoPayloads(photos: PhotoPayload[]) {
 // Encode an already bounded context; selection belongs to the caller.
 export function requestMessages(messages: ProviderMessage[]) {
   const result: {
-    role: "user" | "assistant";
+    role: ProviderMessage["role"];
     content:
       | string
       | (
@@ -159,19 +164,8 @@ const streamEvent = z.object({
     ]),
   ),
   model: optional(z.string()),
-  usage: optional(
-    z.object({
-      cost: optional(z.number()),
-      prompt_tokens: optional(z.number()),
-      completion_tokens: optional(z.number()),
-      prompt_tokens_details: optional(
-        z.object({
-          cached_tokens: optional(z.number()),
-          cache_write_tokens: optional(z.number()),
-        }),
-      ),
-    }),
-  ),
+  // Read field by field by `reportUsage`.
+  usage: z.unknown().optional(),
   choices: optional(
     z.array(z.unknown()).transform((choices) => {
       const parsed = firstChoice.safeParse(choices[0]);
@@ -218,12 +212,60 @@ function providerError(status: number, body: unknown, apiKey: string) {
     .replace(/sk-or-[A-Za-z0-9_-]+/g, "[redacted]")
     .replace(/\s+/g, " ")
     .slice(0, 400);
-  return new Error(`${httpError(status)}${detail ? ` ${detail}` : ""}`);
+  return new ProviderError(httpError(status), detail || null);
+}
+
+// An error OpenRouter answered a request with: our sentence for it, then
+// the provider's own words, also kept apart as `providerMessage`, null when
+// it gave none.
+export class ProviderError extends Error {
+  readonly providerMessage: string | null;
+  constructor(sentence: string, providerMessage: string | null) {
+    super(
+      providerMessage === null ? sentence : `${sentence} ${providerMessage}`,
+    );
+    this.providerMessage = providerMessage;
+  }
+}
+
+const fields = (value: unknown): Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+
+// `usage` after a stream event reports `raw`: the latest report of each
+// field counts, one it leaves out keeps its value, and one that isn't a
+// token count or a cost in dollars is unknown.
+function reportUsage(usage: Usage, raw: unknown): Usage {
+  const reported = fields(raw);
+  const details = fields(reported.prompt_tokens_details);
+  const count = (previous: number | null, value: unknown) =>
+    value === undefined
+      ? previous
+      : Number.isSafeInteger(value) && (value as number) >= 0
+        ? (value as number)
+        : null;
+  const cost = reported.cost;
+  return {
+    costUSD:
+      cost === undefined
+        ? usage.costUSD
+        : typeof cost === "number" && Number.isFinite(cost) && cost >= 0
+          ? cost
+          : null,
+    promptTokens: count(usage.promptTokens, reported.prompt_tokens),
+    completionTokens: count(usage.completionTokens, reported.completion_tokens),
+    cachedPromptTokens: count(usage.cachedPromptTokens, details.cached_tokens),
+    cacheWritePromptTokens: count(
+      usage.cacheWritePromptTokens,
+      details.cache_write_tokens,
+    ),
+  };
 }
 
 export async function completeReply(
   messages: ProviderMessage[],
-  settings: SessionRequest & { maxTokens: number },
+  settings: SessionRequest,
   signal: AbortSignal,
   onText: (text: string) => void,
   fetcher: typeof fetch,
@@ -242,16 +284,12 @@ export async function completeReply(
   let silence = setTimeout(expire, SILENCE_LIMIT_MILLIS);
   let text = "";
   let model = settings.model;
-  const usage: Usage = {
+  let usage: Usage = {
     costUSD: null,
     promptTokens: null,
     completionTokens: null,
     cachedPromptTokens: null,
     cacheWritePromptTokens: null,
-  };
-  // The latest reported value of each counts; others keep theirs.
-  const report = (field: keyof Usage, value: number | undefined) => {
-    if (value !== undefined && Number.isFinite(value)) usage[field] = value;
   };
   // A rejected request or body read is the connection failing, whatever the
   // platform calls it. An abort is our own and passes through.
@@ -322,13 +360,8 @@ export async function completeReply(
         if (data.error)
           throw providerError(data.error.code ?? 502, json, settings.apiKey);
         if (data.model !== undefined) model = data.model;
-        if (data.usage) {
-          const details = data.usage.prompt_tokens_details;
-          report("costUSD", data.usage.cost);
-          report("promptTokens", data.usage.prompt_tokens);
-          report("completionTokens", data.usage.completion_tokens);
-          report("cachedPromptTokens", details?.cached_tokens);
-          report("cacheWritePromptTokens", details?.cache_write_tokens);
+        if (data.usage !== undefined) {
+          usage = reportUsage(usage, data.usage);
         }
         if (data.choices?.finish === "length") truncated = true;
         if (data.choices?.content) {

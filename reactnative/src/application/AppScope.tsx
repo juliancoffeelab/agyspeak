@@ -3,6 +3,7 @@ import type { Startup } from "./useResources";
 import { ChatScopeProvider } from "../features/chat/chatContext";
 import { SettingsScopeProvider } from "../features/settings/settingsContext";
 import { Failure } from "../ui/Failure";
+import { TokenizerLoadError } from "../features/chat/runtime/compaction";
 
 const StartupContext = createContext<{
   startup: Startup;
@@ -72,10 +73,18 @@ function StartupFailure({
   error: unknown;
   onRetry: () => void;
 }) {
+  // A part of the app that didn't load says so; it isn't the user's data.
+  const code = error instanceof TokenizerLoadError;
   return (
     <Failure
-      message="Couldn’t open your data."
-      hint="Saved settings or chat history couldn’t be opened. Your data is kept."
+      message={
+        code ? "Couldn’t load part of the app." : "Couldn’t open your data."
+      }
+      hint={
+        code
+          ? "The part that measures messages didn’t load. Your data is untouched."
+          : "Saved settings or chat history couldn’t be opened. Your data is kept."
+      }
       error={error}
       onRetry={onRetry}
       onDismiss={null}

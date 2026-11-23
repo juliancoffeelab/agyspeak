@@ -23,6 +23,7 @@ import {
   useChatScope,
   useOpenChatScope,
   useChatState,
+  useOpenChat,
   useOpenChatState,
   useDraftPreview,
   useDrafted,
@@ -49,7 +50,7 @@ export function History({
   onOpenSettings: () => void;
 }) {
   const colors = useColors();
-  const busy = useOpenChatState((state) => state.saving, true);
+  const busy = useOpenChatState((state) => state.busy, true);
   const open = useOpenChatScope() !== null;
   return (
     <Screen keyboard="pad" background={colors.background}>
@@ -73,12 +74,12 @@ export function History({
 function OpenHistory({ onOpenChat }: { onOpenChat: (id: string) => void }) {
   const colors = useColors();
   const { chat: commands } = useChatScope();
-  const chats = useChatState((state) => state.history.chats);
+  const chats = useChatState((state) => state.chats);
   const chatsFailure = useChatState((state) => state.chatsFailure);
-  const activeId = useChatState((state) => state.history.activeId);
-  const busy = useChatState((state) => state.saving);
+  const activeId = useOpenChat((view) => view.id);
+  const busy = useChatState((state) => state.busy);
   const error = useChatState((state) => state.error);
-  const unsent = useChatState((state) => state.history.messages.length === 0);
+  const unsent = useOpenChat((view) => view.chat.log.length === 0);
   // The open chat's draft is the live one; the list has it as last saved.
   const activeDrafted = useDrafted(
     activeId,
@@ -193,9 +194,7 @@ function ChatRow({
   const colors = useColors();
   const chat = isSaved(item) ? item : null;
   const draft = useDraftPreview(item.id, item.draft);
-  const replying = useChatState((state) =>
-    state.pending.some((run) => run.chatId === item.id),
-  );
+  const replying = useChatState((state) => state.running.includes(item.id));
   const title = chat?.title ?? "New chat";
   const draftText = draft?.text.trim().replace(/\s+/g, " ") ?? "";
   const label = [

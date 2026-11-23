@@ -10,7 +10,9 @@ import {
   useOpenChatScope,
   useOpenChatModelName,
   useOpenChatState,
+  useOpenChatView,
 } from "./chatContext";
+import { refusal } from "./runtime/machine";
 import { AboveDock } from "../../ui/Screen";
 import { SideDrawer } from "../../ui/SideDrawer";
 import { useColors } from "../../ui/theme";
@@ -20,20 +22,22 @@ import type { PhotoReference } from "./storage/contracts";
 // The chat destination: one layout, mounted from the first frame, whose
 // header, conversation and composer regions fill in place, with History in
 // a drawer beside it. `status` fills the conversation region, and History's
-// list, until the chats are open. The coordinator owns which chat is shown;
+// list, until the chats are open. The workspace owns which chat is shown;
 // this screen only asks it to open another.
 export function ChatEntry({ status }: { status: ReactNode }) {
   const router = useRouter();
   const [historyOpen, setHistoryOpen] = useState(false);
   // The chat is in use while its route is focused and History is closed.
   const focused = useIsFocused() && !historyOpen;
-  const activeId = useOpenChatState((state) => state.history.activeId, null);
+  const activeId = useOpenChatView((view) => view.id, null);
   // The new chat is the one with no messages yet.
-  const inNewChat = useOpenChatState(
-    (state) => state.history.messages.length === 0,
-    true,
+  const inNewChat = useOpenChatView((view) => view.chat.log.length === 0, true);
+  const saving = useOpenChatState((state) => state.busy, false);
+  // Why the chat's model can't be changed now, as when it replies.
+  const modelInUse = useOpenChatView(
+    (view) => refusal(view.chat, "change-model") !== null,
+    false,
   );
-  const saving = useOpenChatState((state) => state.saving, false);
   const modelName = useOpenChatModelName();
   const failure = useOpenChatState((state) => state.openFailure, null);
   const commands = useOpenChatScope()?.chat ?? null;
@@ -108,7 +112,7 @@ export function ChatEntry({ status }: { status: ReactNode }) {
       <ChatLayout
         modelSelector={{
           label: modelName,
-          disabled: !ready || saving,
+          disabled: !ready || saving || modelInUse,
           onPress: () => setChoosingModel(true),
         }}
         newChatDisabled={!ready || saving || inNewChat}

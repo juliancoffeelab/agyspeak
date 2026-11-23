@@ -4,8 +4,21 @@ import {
   completeReply,
   requestMessages,
 } from "../src/providers/openrouter/transport.ts";
-import { toProviderContext } from "../src/features/chat/runtime/context.ts";
+import {
+  RECORDING_LEFT_OUT,
+  replyRequest,
+} from "../src/features/chat/runtime/log.ts";
+import { providerMessages } from "../src/features/chat/runtime/chatRuntime.ts";
+import {
+  continueInstruction,
+  loadTokenizer,
+  replyTail,
+  SUMMARY_HEADING,
+} from "../src/features/chat/runtime/compaction.ts";
 import { parseKeyInput } from "../src/providers/openrouter/key.ts";
+
+// A reply's end is cut at a token boundary.
+await loadTokenizer();
 
 const settings = {
   apiKey: "sk-or-v1-dummy-never-sent",
@@ -77,23 +90,82 @@ test("authentication/rate-limit and malformed responses fail without automatic r
   );
 });
 
-test("context excludes unfinished replies and ends whole at the message crossing the text budget", () => {
+const said = (text) => ({
+  kind: "user",
+  text,
+  audio: null,
+  photos: [],
+  postedAt: null,
+});
+const wrote = (text, status = "complete") => ({
+  kind: "reply",
+  status,
+  text,
+  ending: null,
+  providerMessage: null,
+  model: null,
+  usage: null,
+  maxTokens: null,
+  compaction: null,
+  postedAt: null,
+  elapsedMillis: null,
+});
+const compaction = (kept, instruction) => ({
+  kind: "compaction",
+  summary: { text: "They said hello.", tokens: 4, model: "test/model" },
+  kept,
+  pass: "final",
+  instruction,
+});
+
+test("context is the summary, what it keeps, then every entry after the compaction, with no text budget", () => {
   const long = "long".repeat(7000);
-  const history = [
-    { ...user, text: "Older" },
-    { ...user, role: "assistant", text: long },
-    user,
-    { ...user, role: "assistant", text: "Failure", status: "failed" },
-    { ...user, role: "assistant", text: "", status: "pending" },
-  ];
-  assert.deepEqual(requestMessages(toProviderContext(history)), [
-    { role: "assistant", content: long },
-    { role: "user", content: "Hello" },
-  ]);
+  const sent = (log) =>
+    requestMessages(
+      replyRequest(log).map(({ role, text }) => ({ role, text })),
+    );
+  const before = [said("Compacted"), wrote("Compacted too")];
   assert.deepEqual(
-    requestMessages(toProviderContext([{ ...user, text: long }])),
-    [{ role: "user", content: long }],
+    sent([
+      ...before,
+      compaction([], null),
+      said("Older"),
+      wrote(long),
+      said("Hello"),
+    ]),
+    [
+      { role: "system", content: `${SUMMARY_HEADING}They said hello.` },
+      { role: "user", content: "Older" },
+      { role: "assistant", content: long },
+      { role: "user", content: "Hello" },
+    ],
   );
+  // A reply cut while it was written: its compaction keeps its end and asks
+  // for the rest, which follows as the next part.
+  const cut = long.length - 3;
+  const tail = replyTail(long.slice(0, cut));
+  const instruction = continueInstruction({ shown: "end", at: "mid-text" });
+  assert.deepEqual(
+    sent([
+      ...before,
+      said("Older"),
+      wrote(long.slice(0, cut), "cut"),
+      compaction(
+        [[{ entry: 3, from: cut - tail.length, to: cut }]],
+        instruction,
+      ),
+      wrote(long.slice(cut)),
+      said("Hello"),
+    ]),
+    [
+      { role: "system", content: `${SUMMARY_HEADING}They said hello.` },
+      { role: "assistant", content: tail },
+      { role: "user", content: instruction },
+      { role: "assistant", content: long.slice(cut) },
+      { role: "user", content: "Hello" },
+    ],
+  );
+  assert.equal(sent([...before, said("Hello")]).length, 3);
 });
 
 test("aborting propagates to the transport", async () => {
@@ -185,7 +257,17 @@ test("a 429 is reported as rate limited, with the provider's own detail and no g
           { status: 429 },
         ),
     ),
-    /^Error: The request was rate limited\. Try again later\. Provider returned error temporarily rate-limited upstream$/,
+    (error) => {
+      assert.match(
+        String(error),
+        /^Error: The request was rate limited\. Try again later\. Provider returned error temporarily rate-limited upstream$/,
+      );
+      assert.equal(
+        error.providerMessage,
+        "Provider returned error temporarily rate-limited upstream",
+      );
+      return true;
+    },
   );
   await assert.rejects(
     completeReply(
@@ -195,7 +277,14 @@ test("a 429 is reported as rate limited, with the provider's own detail and no g
       () => {},
       async () => new Response("", { status: 429 }),
     ),
-    /^Error: The request was rate limited\. Try again later\.$/,
+    (error) => {
+      assert.match(
+        String(error),
+        /^Error: The request was rate limited\. Try again later\.$/,
+      );
+      assert.equal(error.providerMessage, null);
+      return true;
+    },
   );
 });
 
@@ -272,10 +361,30 @@ test("text follow-ups preserve earlier audio context and honor the selected mode
   );
 });
 
-test("retained audio context is bounded independently of text", () => {
-  const large = { data: "A".repeat(8 * 1024 * 1024), format: "wav" };
-  const history = [1, 2, 3].map((id) => ({ ...user, id, audio: large }));
-  assert.equal(requestMessages(toProviderContext(history)).length, 2);
+test("retained audio is bounded independently of text, and older recordings leave a placeholder", async () => {
+  const data = "A".repeat(8 * 1024 * 1024);
+  const log = [1, 2, 3].map((key) => ({
+    ...said("Hello"),
+    audio: {
+      key: String(key),
+      format: "wav",
+      encodedLength: data.length,
+      durationMillis: null,
+      levels: null,
+    },
+  }));
+  const read = [];
+  const sent = requestMessages(
+    await providerMessages(replyRequest(log), async (keys) => {
+      read.push(...keys);
+      return new Map(keys.map((key) => [key, data]));
+    }),
+  );
+  assert.equal(sent.length, 3);
+  assert.ok(sent[0].content.endsWith(RECORDING_LEFT_OUT));
+  assert.deepEqual(read, ["2", "3"], "a recording left out isn't read");
+  for (const message of sent.slice(1))
+    assert.equal(message.content[0].type, "input_audio");
 });
 
 test("incompatible selected models surface a provider error without a model switch or retry", async () => {

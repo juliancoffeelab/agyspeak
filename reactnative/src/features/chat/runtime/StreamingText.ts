@@ -48,6 +48,8 @@ export class StreamingText {
   update(text: string) {
     if (this.closed) return;
     this.text = text;
+    // A reply cut back to a clean break shows the shorter text at once.
+    if (this.shown > text.length) this.reveal(this.cut());
     this.schedule();
   }
   private schedule() {
