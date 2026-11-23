@@ -5,7 +5,7 @@ const { withAppBuildGradle, withDangerousMod } = require("expo/config-plugins");
 // The development build overrides the adaptive icon's background with a dark
 // one, so the two installed apps are distinguishable on the launcher.
 const DEV_BACKGROUND = "assets/android-icon-background-dev.png";
-const adaptiveIcon = `<?xml version="1.0" encoding="utf-8"?>
+const DEV_ADAPTIVE_ICON_XML = `<?xml version="1.0" encoding="utf-8"?>
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
     <background android:drawable="@drawable/ic_launcher_background_dev"/>
     <foreground android:drawable="@mipmap/ic_launcher_foreground"/>
@@ -28,7 +28,7 @@ function withDevelopmentIcon(config) {
       for (const name of ["ic_launcher", "ic_launcher_round"])
         fs.writeFileSync(
           path.join(res, `mipmap-anydpi-v26/${name}.xml`),
-          adaptiveIcon,
+          DEV_ADAPTIVE_ICON_XML,
         );
       return config;
     },

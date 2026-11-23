@@ -14,7 +14,7 @@ import {
   workspace,
 } from "./sqlite-helper.mjs";
 
-const models = [
+const MOCK_TEXT_AND_AUDIO_MODELS = [
   {
     id: "text",
     name: "Text model",
@@ -30,7 +30,7 @@ const models = [
     outputPrice: null,
   },
 ];
-const recording = { data: "UklGRg==", format: "wav" };
+const MOCK_RECORDING_TO_SEND = { data: "UklGRg==", format: "wav" };
 const said = (text, audio = null) => ({
   kind: "user",
   text,
@@ -38,7 +38,7 @@ const said = (text, audio = null) => ({
   photos: [],
   postedAt: null,
 });
-const voice = {
+const MOCK_SAVED_AUDIO = {
   key: "1",
   format: "wav",
   encodedLength: 8,
@@ -47,12 +47,15 @@ const voice = {
 };
 
 test("audio capability distinguishes supported, unsupported, and unknown models", () => {
-  assert.equal(audioInputIssue("audio", models), null);
+  assert.equal(audioInputIssue("audio", MOCK_TEXT_AND_AUDIO_MODELS), null);
   assert.match(
-    audioInputIssue("text", models),
+    audioInputIssue("text", MOCK_TEXT_AND_AUDIO_MODELS),
     /Text model doesn’t support audio/,
   );
-  assert.match(audioInputIssue("custom", models), /verify audio support/);
+  assert.match(
+    audioInputIssue("custom", MOCK_TEXT_AND_AUDIO_MODELS),
+    /verify audio support/,
+  );
   assert.match(audioInputIssue("audio", undefined), /verify audio support/);
 });
 
@@ -62,8 +65,8 @@ test("audio eligibility is read from the request, whatever text follows the reco
       ?.reason === "no audio";
   // Text has no budget: a recording stays in the request behind any amount.
   const long = said("a".repeat(23_000));
-  assert.equal(needsAudio([said("", voice), said("hello")]), true);
-  assert.equal(needsAudio([said("", voice), long, said("a")]), true);
+  assert.equal(needsAudio([said("", MOCK_SAVED_AUDIO), said("hello")]), true);
+  assert.equal(needsAudio([said("", MOCK_SAVED_AUDIO), long, said("a")]), true);
   assert.equal(needsAudio([said("plain"), said("hello")]), false);
 });
 
@@ -75,11 +78,13 @@ test("a chat whose request carries audio refuses sends and retries on a text mod
     store,
     openAt: null,
     reply: port.reply,
-    models: { audioIssue: (model) => audioInputIssue(model, models) },
+    models: {
+      audioIssue: (model) => audioInputIssue(model, MOCK_TEXT_AND_AUDIO_MODELS),
+    },
   });
   try {
     await controller.chooseModel("audio");
-    assert.equal(await controller.sendAudio(recording), "saved");
+    assert.equal(await controller.sendAudio(MOCK_RECORDING_TO_SEND), "saved");
     await tick();
     port.requests[0].answer("Heard you");
     await tick();
@@ -90,7 +95,7 @@ test("a chat whose request carries audio refuses sends and retries on a text mod
     const before = await readLatest(store);
     assert.equal(await controller.send("Follow-up", []), "refused");
     assert.match(controller.state.getState().error, /doesn’t support audio/);
-    assert.equal(await controller.sendAudio(recording), "refused");
+    assert.equal(await controller.sendAudio(MOCK_RECORDING_TO_SEND), "refused");
     assert.match(controller.command({ kind: "retry" }), /support audio/);
     assert.equal(port.requests.length, 1);
     assert.deepEqual(await readLatest(store), before);
@@ -116,7 +121,9 @@ test("a text model can still send plain text in a conversation without audio", a
     openAt: null,
     reply: port.reply,
     defaultModel: () => "text",
-    models: { audioIssue: (model) => audioInputIssue(model, models) },
+    models: {
+      audioIssue: (model) => audioInputIssue(model, MOCK_TEXT_AND_AUDIO_MODELS),
+    },
   });
   try {
     assert.equal(await controller.send("Hello", []), "saved");

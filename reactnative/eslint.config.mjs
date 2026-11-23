@@ -10,6 +10,7 @@ import importX from "eslint-plugin-import-x";
 import { createTypeScriptImportResolver } from "eslint-import-resolver-typescript";
 import globals from "globals";
 import tseslint from "typescript-eslint";
+import { constantCaseRule } from "./eslint-rules/constant-case.mjs";
 import { migrationBoundaryRule } from "./eslint-rules/migration-boundary.mjs";
 
 const rootDir = dirname(fileURLToPath(import.meta.url));
@@ -184,13 +185,43 @@ export default defineConfig([
     },
   },
   {
+    files: ["**/*.{ts,tsx,js,jsx,mjs,cjs}"],
+    plugins: {
+      local: {
+        rules: {
+          "constant-case": constantCaseRule,
+          "migration-boundary": migrationBoundaryRule,
+        },
+      },
+    },
+    rules: {
+      "local/constant-case": ["error", { allowExports: [], note: "" }],
+    },
+  },
+  {
+    files: ["tests/**"],
+    rules: {
+      "local/constant-case": [
+        "error",
+        {
+          allowExports: [],
+          note: "In tests, made-up data standing in for something real is named with a MOCK_ prefix.",
+        },
+      ],
+    },
+  },
+  {
+    // Every migration step is required to export its `version`.
+    files: ["src/migrations/history/v*.ts"],
+    rules: {
+      "local/constant-case": ["error", { allowExports: ["version"], note: "" }],
+    },
+  },
+  {
     // Every module the toolchain accepts. Frozen-fixture tests are the one
     // exception: they may import individual historical steps.
     files: ["**/*.{ts,tsx,js,jsx,mjs,cjs}"],
     ignores: ["tests/**"],
-    plugins: {
-      local: { rules: { "migration-boundary": migrationBoundaryRule } },
-    },
     rules: {
       "local/migration-boundary": [
         "error",

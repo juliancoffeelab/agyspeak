@@ -13,7 +13,7 @@ export type Startup =
   | { status: "ready"; core: CoreResources; resources: AppResources }
   | { status: "failed"; error: unknown };
 
-const opening: Startup = { status: "opening", core: null };
+const OPENING_STARTUP: Startup = { status: "opening", core: null };
 
 // Resource scopes never overlap: each opening starts after the previous scope,
 // including a late or failed opening, has been disposed.
@@ -22,7 +22,7 @@ let settled: Promise<unknown> = Promise.resolve();
 // The single startup owner: retry by remounting the attempt, and disposal even
 // when opening completes after unmount.
 export function useResources(queryClient: QueryClient) {
-  const [startup, setStartup] = useState<Startup>(opening);
+  const [startup, setStartup] = useState<Startup>(OPENING_STARTUP);
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let mounted = true;
@@ -52,7 +52,7 @@ export function useResources(queryClient: QueryClient) {
       mounted = false;
       // The disposed resources never show again, including when the effect
       // restarts under Fast Refresh.
-      setStartup(opening);
+      setStartup(OPENING_STARTUP);
       settled = opened
         .then(
           (scope) => scope.dispose(),

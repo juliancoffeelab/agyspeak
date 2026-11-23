@@ -215,7 +215,7 @@ export async function workspace({ openAt, store, models, ...options }) {
 }
 
 // Usage a mocked reply reports: none.
-export const NO_USAGE = {
+export const MOCK_NO_USAGE = {
   costUSD: null,
   promptTokens: null,
   completionTokens: null,
@@ -238,7 +238,7 @@ export function replies() {
         signal,
         onText,
         answer: (text, model = settings.model, stopped = null) =>
-          resolve({ text, model, usage: NO_USAGE, stopped }),
+          resolve({ text, model, usage: MOCK_NO_USAGE, stopped }),
         fail: reject,
       });
     });

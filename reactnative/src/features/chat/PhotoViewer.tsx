@@ -14,7 +14,7 @@ import { Failure } from "../../ui/Failure";
 import { StatusBar } from "expo-status-bar";
 import { Overlay } from "../../ui/Overlay";
 import { Screen } from "../../ui/Screen";
-import { FixedColorsContext, palettes } from "../../ui/theme";
+import { FixedColorsContext, PALETTES } from "../../ui/theme";
 import { PHOTO_PAN_SPEED, shouldDismissPhoto } from "./photoInteraction";
 import type { PhotoInput, PhotoReference } from "./storage/contracts";
 
@@ -60,7 +60,7 @@ export function PhotoViewer({
               <ActivityIndicator color="white" />
             ) : (
               <View style={styles.details}>
-                <FixedColorsContext value={palettes.dark}>
+                <FixedColorsContext value={PALETTES.dark}>
                   <Failure
                     message="Couldn’t load this photo."
                     hint={null}

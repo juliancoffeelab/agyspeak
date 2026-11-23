@@ -71,7 +71,7 @@ type Row =
   | { kind: "unsaved"; key: string; cause: unknown };
 
 // A part being written, as it shows before its entry is made.
-const writingPart: ReplyEntry = {
+const WRITING_PART: ReplyEntry = {
   kind: "reply",
   status: "complete",
   text: "",
@@ -183,7 +183,7 @@ function conversationRows(
         entry: phase.message,
       });
     } else rows.push(running);
-  } else if (phase.kind === "writing") reply(log.length, writingPart, true);
+  } else if (phase.kind === "writing") reply(log.length, WRITING_PART, true);
   else if (phase.kind === "continuing") {
     if (phase.cut.part) reply(log.length, phase.cut.part, false);
     rows.push(running);

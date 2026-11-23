@@ -20,29 +20,37 @@ import { parseKeyInput } from "../src/providers/openrouter/key.ts";
 // A reply's end is cut at a token boundary.
 await loadTokenizer();
 
-const settings = {
+const MOCK_REQUEST_SETTINGS = {
   apiKey: "sk-or-v1-dummy-never-sent",
   model: "openrouter/free",
   sessionId: "0b5c2f3e-8d4a-4c1e-9f7a-2e6d1b3c5a90",
   maxTokens: 27_000,
 };
-const user = { id: 1, role: "user", text: "Hello", status: "complete" };
+const MOCK_USER_MESSAGE = {
+  id: 1,
+  role: "user",
+  text: "Hello",
+  status: "complete",
+};
 const signal = () => new AbortController().signal;
 
 test("request is bounded, authenticated, and parsed without a live API call", async () => {
   const result = await completeReply(
-    [user],
-    settings,
+    [MOCK_USER_MESSAGE],
+    MOCK_REQUEST_SETTINGS,
     signal(),
     () => {},
     async (url, options) => {
       assert.equal(url, "https://openrouter.ai/api/v1/chat/completions");
-      assert.equal(options.headers.Authorization, `Bearer ${settings.apiKey}`);
+      assert.equal(
+        options.headers.Authorization,
+        `Bearer ${MOCK_REQUEST_SETTINGS.apiKey}`,
+      );
       const body = JSON.parse(options.body);
       assert.equal(body.model, "openrouter/free");
       assert.equal(body.max_tokens, 27_000);
       assert.equal(body.stream, true);
-      assert.equal(body.session_id, settings.sessionId);
+      assert.equal(body.session_id, MOCK_REQUEST_SETTINGS.sessionId);
       assert.deepEqual(body.messages, [{ role: "user", content: "Hello" }]);
       return streamResponse("Hi!", "chosen/free-model", 0);
     },
@@ -66,8 +74,8 @@ test("authentication/rate-limit and malformed responses fail without automatic r
     let calls = 0;
     await assert.rejects(
       completeReply(
-        [user],
-        settings,
+        [MOCK_USER_MESSAGE],
+        MOCK_REQUEST_SETTINGS,
         signal(),
         () => {},
         async () => {
@@ -80,8 +88,8 @@ test("authentication/rate-limit and malformed responses fail without automatic r
   }
   await assert.rejects(
     completeReply(
-      [user],
-      settings,
+      [MOCK_USER_MESSAGE],
+      MOCK_REQUEST_SETTINGS,
       signal(),
       () => {},
       async () => streamResponse(""),
@@ -171,8 +179,8 @@ test("context is the summary, what it keeps, then every entry after the compacti
 test("aborting propagates to the transport", async () => {
   const controller = new AbortController();
   const task = completeReply(
-    [user],
-    settings,
+    [MOCK_USER_MESSAGE],
+    MOCK_REQUEST_SETTINGS,
     controller.signal,
     () => {},
     (_url, options) =>
@@ -205,8 +213,8 @@ test("QR and clipboard key formats are validated without executing links or acce
 test("provider errors retain actionable details and redact credentials", async () => {
   await assert.rejects(
     completeReply(
-      [user],
-      settings,
+      [MOCK_USER_MESSAGE],
+      MOCK_REQUEST_SETTINGS,
       signal(),
       () => {},
       async () =>
@@ -217,7 +225,7 @@ test("provider errors retain actionable details and redact credentials", async (
               metadata: {
                 raw: JSON.stringify({
                   error: {
-                    message: `Unsupported parameter; key ${settings.apiKey}`,
+                    message: `Unsupported parameter; key ${MOCK_REQUEST_SETTINGS.apiKey}`,
                   },
                 }),
               },
@@ -228,7 +236,7 @@ test("provider errors retain actionable details and redact credentials", async (
     ),
     (error) => {
       assert.match(error.message, /Unsupported parameter/);
-      assert.ok(!error.message.includes(settings.apiKey));
+      assert.ok(!error.message.includes(MOCK_REQUEST_SETTINGS.apiKey));
       assert.match(error.message, /redacted/);
       return true;
     },
@@ -238,8 +246,8 @@ test("provider errors retain actionable details and redact credentials", async (
 test("a 429 is reported as rate limited, with the provider's own detail and no guess at whose limit", async () => {
   await assert.rejects(
     completeReply(
-      [user],
-      settings,
+      [MOCK_USER_MESSAGE],
+      MOCK_REQUEST_SETTINGS,
       signal(),
       () => {},
       async () =>
@@ -271,8 +279,8 @@ test("a 429 is reported as rate limited, with the provider's own detail and no g
   );
   await assert.rejects(
     completeReply(
-      [user],
-      settings,
+      [MOCK_USER_MESSAGE],
+      MOCK_REQUEST_SETTINGS,
       signal(),
       () => {},
       async () => new Response("", { status: 429 }),
@@ -296,8 +304,8 @@ test("audio sends only the recording and reads an ordinary text answer", async (
     levels: [0.1, 0.8],
   };
   const result = await completeReply(
-    [{ ...user, text: "Voice message", audio }],
-    { ...settings, model: "google/gemini-3.8-flash" },
+    [{ ...MOCK_USER_MESSAGE, text: "Voice message", audio }],
+    { ...MOCK_REQUEST_SETTINGS, model: "google/gemini-3.8-flash" },
     signal(),
     () => {},
     async (_url, options) => {
@@ -316,7 +324,7 @@ test("audio sends only the recording and reads an ordinary text answer", async (
       ]);
       assert.equal(body.response_format, undefined);
       assert.deepEqual(body.reasoning, { effort: "low" });
-      return streamResponse("Hej!", settings.model, 0.001);
+      return streamResponse("Hej!", MOCK_REQUEST_SETTINGS.model, 0.001);
     },
   );
   assert.equal(result.text, "Hej!");
@@ -326,8 +334,8 @@ test("audio sends only the recording and reads an ordinary text answer", async (
 test("invalid audio never reaches the network", async () => {
   await assert.rejects(
     completeReply(
-      [{ ...user, audio: { data: "", format: "exe" } }],
-      settings,
+      [{ ...MOCK_USER_MESSAGE, audio: { data: "", format: "exe" } }],
+      MOCK_REQUEST_SETTINGS,
       signal(),
       () => {},
       async () => {
@@ -340,18 +348,18 @@ test("invalid audio never reaches the network", async () => {
 test("text follow-ups preserve earlier audio context and honor the selected model", async () => {
   const audio = { data: "UklGRg==", format: "wav" };
   const history = [
-    { ...user, audio },
-    { ...user, id: 2, role: "assistant", text: "Hello!" },
-    { ...user, id: 3, text: "What did I say?" },
+    { ...MOCK_USER_MESSAGE, audio },
+    { ...MOCK_USER_MESSAGE, id: 2, role: "assistant", text: "Hello!" },
+    { ...MOCK_USER_MESSAGE, id: 3, text: "What did I say?" },
   ];
   await completeReply(
     history,
-    settings,
+    MOCK_REQUEST_SETTINGS,
     signal(),
     () => {},
     async (_url, options) => {
       const body = JSON.parse(options.body);
-      assert.equal(body.model, settings.model);
+      assert.equal(body.model, MOCK_REQUEST_SETTINGS.model);
       assert.deepEqual(body.messages[0].content, [
         { type: "input_audio", input_audio: audio },
       ]);
@@ -391,13 +399,16 @@ test("incompatible selected models surface a provider error without a model swit
   let calls = 0;
   await assert.rejects(
     completeReply(
-      [{ ...user, audio: { data: "UklGRg==", format: "wav" } }],
-      settings,
+      [{ ...MOCK_USER_MESSAGE, audio: { data: "UklGRg==", format: "wav" } }],
+      MOCK_REQUEST_SETTINGS,
       signal(),
       () => {},
       async (_url, options) => {
         calls++;
-        assert.equal(JSON.parse(options.body).model, settings.model);
+        assert.equal(
+          JSON.parse(options.body).model,
+          MOCK_REQUEST_SETTINGS.model,
+        );
         return Response.json(
           { error: { message: "This model does not support audio input." } },
           { status: 400 },
@@ -409,7 +420,11 @@ test("incompatible selected models surface a provider error without a model swit
   assert.equal(calls, 1);
 });
 
-function streamResponse(text, model = settings.model, cost = null) {
+function streamResponse(
+  text,
+  model = MOCK_REQUEST_SETTINGS.model,
+  cost = null,
+) {
   return new Response(
     `data: ${JSON.stringify({ model, choices: [{ delta: { content: text } }], usage: { cost } })}\n\ndata: [DONE]\n\n`,
     { headers: { "Content-Type": "text/event-stream" } },

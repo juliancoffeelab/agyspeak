@@ -61,7 +61,7 @@ export type Rows = {
   [table in keyof typeof rows]: z.infer<(typeof rows)[table]>;
 };
 
-const schema = [
+const SCHEMA_STATEMENTS = [
   `CREATE TABLE chats (
     id TEXT PRIMARY KEY NOT NULL,
     title TEXT NOT NULL,
@@ -127,7 +127,7 @@ export function create(source: { systemLanguage: string | null }): Statement[] {
     speech_language: source.systemLanguage,
   };
   return [
-    ...schema.map((sql) => ({ sql, params: [] })),
+    ...SCHEMA_STATEMENTS.map((sql) => ({ sql, params: [] })),
     {
       sql: "INSERT INTO preferences (id, default_model, speech_language) VALUES (1, ?, ?)",
       params: [preferences.default_model, preferences.speech_language],

@@ -65,45 +65,48 @@ test("a continuation's end fits beside a summary at the floor", () => {
       );
 });
 
-const takes = { audio: null, image: null };
-const deaf = { audio: "No audio here.", image: "No photos here." };
+const MOCK_MEDIA_TAKEN = { audio: null, image: null };
+const MOCK_MEDIA_REFUSED = {
+  audio: "No audio here.",
+  image: "No photos here.",
+};
 // The chat's models: a large one, the same id after its alias moved, a
 // small text-only one with a short output limit, and one below the floor.
-const MODELS = [
+const MOCK_MODELS = [
   {
     id: "a",
     answering: "a1",
     contextLength: 128_000,
     maxOutput: 100_000,
-    issues: takes,
+    issues: MOCK_MEDIA_TAKEN,
   },
   {
     id: "a",
     answering: "a2",
     contextLength: 128_000,
     maxOutput: 100_000,
-    issues: takes,
+    issues: MOCK_MEDIA_TAKEN,
   },
   {
     id: "b",
     answering: "b",
     contextLength: 4_000,
     maxOutput: 400,
-    issues: deaf,
+    issues: MOCK_MEDIA_REFUSED,
   },
   {
     id: "b",
     answering: "b",
     contextLength: 4_000,
     maxOutput: 400,
-    issues: takes,
+    issues: MOCK_MEDIA_TAKEN,
   },
   {
     id: "c",
     answering: "c",
     contextLength: 3_000,
     maxOutput: 1_000,
-    issues: takes,
+    issues: MOCK_MEDIA_TAKEN,
   },
 ];
 
@@ -502,14 +505,14 @@ const action = fc.oneof(
     weight: 2,
     arbitrary: fc.record({
       t: fc.constant("model"),
-      index: fc.integer({ min: 0, max: MODELS.length - 1 }),
+      index: fc.integer({ min: 0, max: MOCK_MODELS.length - 1 }),
     }),
   },
   {
     weight: 1,
     arbitrary: fc.record({
       t: fc.constant("capabilities"),
-      index: fc.integer({ min: 0, max: MODELS.length - 1 }),
+      index: fc.integer({ min: 0, max: MOCK_MODELS.length - 1 }),
     }),
   },
 );
@@ -598,12 +601,13 @@ const blockedPath = (refusal) =>
     ? "too small"
     : refusal.reason === SUMMARY_TOO_LARGE
       ? "too large"
-      : refusal.reason === deaf.audio || refusal.reason === deaf.image
+      : refusal.reason === MOCK_MEDIA_REFUSED.audio ||
+          refusal.reason === MOCK_MEDIA_REFUSED.image
         ? "media"
         : null;
 // A chat saved with a message larger than a compaction request, as a log
 // edited by hand or undone from a compacted one can be at the cap.
-const OVERSIZED = [
+const MOCK_OVERSIZED = [
   {
     kind: "user",
     text: text(3_800, 0),
@@ -629,7 +633,7 @@ const OVERSIZED = [
 // Passes that would have kept the exchange but for a send's room.
 let keptButForTheSend = 0;
 // How often the rarer paths were taken, across runs.
-const reached = {
+let reached = {
   partial: 0,
   kept: 0,
   end: 0,
@@ -1043,12 +1047,12 @@ class World {
       case "model":
         return this.apply({
           kind: "change-model",
-          model: MODELS[action.index],
+          model: MOCK_MODELS[action.index],
         });
       case "capabilities":
         return this.apply({
           kind: "capabilities",
-          model: MODELS[action.index],
+          model: MOCK_MODELS[action.index],
         });
       case "allowed": {
         // One of the commands the phase takes, as a user who reads the
@@ -1163,10 +1167,10 @@ test("the chat machine keeps its invariants whatever happens", () => {
   const property = fc.property(
     fc.integer({ min: 0, max: 3 }),
     fc.constantFrom(1, 0.75),
-    fc.constantFrom([], [], [], OVERSIZED),
+    fc.constantFrom([], [], [], MOCK_OVERSIZED),
     fc.array(action, { minLength: 10, maxLength: 80, size: "max" }),
     (model, scale, log, actions) => {
-      const world = new World(MODELS[model], scale, log);
+      const world = new World(MOCK_MODELS[model], scale, log);
       for (const next of actions) world.act(next);
       world.drain();
       // A chat opens again from what was saved.
@@ -1194,7 +1198,7 @@ test("every ending a reply saves has its sentence", () => {
 // A reply cut at the cut line goes on until the continuation limit, ends
 // cut off, and can be continued by hand from a fresh allowance.
 test("a reply cut off at the continuation limit can be continued", () => {
-  const world = new World(MODELS[0], 1, []);
+  const world = new World(MOCK_MODELS[0], 1, []);
   world.act({ t: "send", tokens: 50, seed: 1, photos: [] });
   const cut = { fill: 1, stopped: "length", reported: true, other: false };
   const whole = { fill: 0.5, stopped: null, reported: true, other: false };
@@ -1233,7 +1237,7 @@ test("a reply cut off at the continuation limit can be continued", () => {
 // A pass that makes room for a message keeps the latest exchange only when
 // the message has its room beside it, though the target alone would hold it.
 test("a pass before a send keeps the latest exchange only with room for the message", () => {
-  const world = new World(MODELS[0], 1, []);
+  const world = new World(MOCK_MODELS[0], 1, []);
   const settle = () => {
     while (world.write !== null) world.act({ t: "save", ok: true });
   };
@@ -1268,7 +1272,7 @@ test("a pass before a send keeps the latest exchange only with room for the mess
 // compaction; stopped once it is made but another is needed, the message
 // is given back and the pass made is kept.
 test("a message stopped after a pass made room for it is given back, the pass kept", () => {
-  const world = new World(MODELS[0], 1, []);
+  const world = new World(MOCK_MODELS[0], 1, []);
   const settle = () => {
     while (world.write !== null) world.act({ t: "save", ok: true });
   };

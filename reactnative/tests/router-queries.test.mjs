@@ -13,7 +13,7 @@ import {
   usagePresentation,
 } from "../src/providers/openrouter/queries.ts";
 
-const catalog = {
+const MOCK_CATALOG_RESPONSE = {
   data: [
     {
       id: "test/model",
@@ -26,8 +26,16 @@ const catalog = {
 const usage = (value) => ({
   data: { usage_daily: value, usage_monthly: value, limit_remaining: 5 },
 });
-const first = { apiKey: "sk-or-1111111111111111", lifetime: 1, revision: 0 };
-const second = { apiKey: "sk-or-2222222222222222", lifetime: 1, revision: 1 };
+const MOCK_FIRST_CREDENTIAL = {
+  apiKey: "sk-or-1111111111111111",
+  lifetime: 1,
+  revision: 0,
+};
+const MOCK_SECOND_CREDENTIAL = {
+  apiKey: "sk-or-2222222222222222",
+  lifetime: 1,
+  revision: 1,
+};
 const reply = (data) => ({ ok: true, json: async () => data });
 
 test("catalog loads from disk, refreshes explicitly, and retains data if refresh fails", async () => {
@@ -39,7 +47,7 @@ test("catalog loads from disk, refreshes explicitly, and retains data if refresh
     {
       read: async () => {
         reads++;
-        return parseModels(catalog);
+        return parseModels(MOCK_CATALOG_RESPONSE);
       },
       write: async () => {
         writes++;
@@ -48,7 +56,7 @@ test("catalog loads from disk, refreshes explicitly, and retains data if refresh
     async () => {
       requests++;
       if (requests > 1) throw new Error("offline");
-      return reply(catalog);
+      return reply(MOCK_CATALOG_RESPONSE);
     },
   );
   try {
@@ -72,7 +80,7 @@ test("catalog loads from disk, refreshes explicitly, and retains data if refresh
 test("spending remains cached during refresh and failed refresh; different keys stay isolated", async () => {
   const client = new QueryClient();
   let fail = false;
-  const options = routerUsageQuery(first, async (url) => {
+  const options = routerUsageQuery(MOCK_FIRST_CREDENTIAL, async (url) => {
     if (fail) throw new Error("offline");
     return url.endsWith("/credits")
       ? { ok: false, status: 403 }
@@ -91,7 +99,9 @@ test("spending remains cached during refresh and failed refresh; different keys 
     );
     assert.equal(observer.getCurrentResult().data.daily, 1);
     assert.equal(observer.getCurrentResult().isError, true);
-    observer.setOptions(routerUsageQuery(second, async () => reply(usage(2))));
+    observer.setOptions(
+      routerUsageQuery(MOCK_SECOND_CREDENTIAL, async () => reply(usage(2))),
+    );
     assert.equal(observer.getCurrentResult().data, undefined);
     await observer.refetch();
     assert.equal(observer.getCurrentResult().data.daily, 2);
@@ -116,7 +126,7 @@ test("spending stays idle while disconnected and never puts the key in its cache
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(observer.getCurrentResult().fetchStatus, "idle");
     assert.equal(requests, 0);
-    observer.setOptions(routerUsageQuery(first, fetcher));
+    observer.setOptions(routerUsageQuery(MOCK_FIRST_CREDENTIAL, fetcher));
     await observer.refetch();
     assert.equal(requests, 2);
     assert.equal(observer.getCurrentResult().data.daily, 1);
@@ -136,7 +146,7 @@ test("spending stays idle while disconnected and never puts the key in its cache
 test("authentication failure overrides cached stats; network failure preserves them", async () => {
   const client = new QueryClient();
   let status = 200;
-  const options = routerUsageQuery(first, async (url) =>
+  const options = routerUsageQuery(MOCK_FIRST_CREDENTIAL, async (url) =>
     url.endsWith("/credits")
       ? { ok: false, status: 403 }
       : status === 200
@@ -178,7 +188,7 @@ test("authentication failure overrides cached stats; network failure preserves t
 
 test("a recreated connection owner never sees usage cached for an earlier key", async () => {
   const client = new QueryClient();
-  let saved = first.apiKey;
+  let saved = MOCK_FIRST_CREDENTIAL.apiKey;
   const secure = {
     get: async () => saved,
     set: async (_, value) => {
@@ -209,7 +219,7 @@ test("a recreated connection owner never sees usage cached for an earlier key", 
     owners.push(createOpenRouterConnection(secure));
     await owners[0].read();
     assert.equal(await observe(owners[0]), 1);
-    await owners[0].save(second.apiKey);
+    await owners[0].save(MOCK_SECOND_CREDENTIAL.apiKey);
     discardUsage(client, owners[0].lifetime, 1);
     assert.equal(client.getQueryCache().getAll().length, 0);
     // A new scope reads the replacement key and starts again at revision 0.

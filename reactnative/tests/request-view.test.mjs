@@ -3,7 +3,7 @@ import { test } from "node:test";
 import fc from "fast-check";
 import {
   connect,
-  NO_USAGE,
+  MOCK_NO_USAGE,
   openChat,
   tick,
   workspace,
@@ -188,7 +188,7 @@ async function harness(store, summary) {
         return {
           text: summary,
           model: request.model,
-          usage: NO_USAGE,
+          usage: MOCK_NO_USAGE,
           stopped: null,
         };
       const next = script.shift();
@@ -196,7 +196,7 @@ async function harness(store, summary) {
         return {
           text: next.text,
           model: request.model,
-          usage: NO_USAGE,
+          usage: MOCK_NO_USAGE,
           stopped: next.stopped,
         };
       sent.push(messages);

@@ -23,7 +23,12 @@ import {
 } from "../src/features/chat/runtime/capability.ts";
 import { parseModels } from "../src/providers/openrouter/metadata.ts";
 
-const photo = { data: "/9j/", thumbnail: "/9j/", width: 100, height: 80 };
+const MOCK_JPEG_PHOTO = {
+  data: "/9j/",
+  thumbnail: "/9j/",
+  width: 100,
+  height: 80,
+};
 const imageIssue = (model) => (model === "vision" ? null : "No image support");
 // A workspace on the new chat, its photos taken by "vision" only.
 async function setup() {
@@ -54,7 +59,9 @@ test("photos are saved for their message, which names them; a request reads them
   const { store, sqlite, queries, controller, requests } = await setup();
   try {
     await controller.chooseModel("vision");
-    await controller.state.getState().draft.addPhotos([photo, photo]);
+    await controller.state
+      .getState()
+      .draft.addPhotos([MOCK_JPEG_PHOTO, MOCK_JPEG_PHOTO]);
     assert.equal(await sendWithPhotos(controller, "caption"), "saved");
     await tick();
     const [message] = (await startAt(store, "chat")).log;
@@ -83,7 +90,7 @@ test("photos are saved for their message, which names them; a request reads them
     ]);
     assert.deepEqual(
       await controller.readPhoto({ draft: false, ...message.photos[0] }),
-      photo,
+      MOCK_JPEG_PHOTO,
     );
     await controller.remove("chat");
     assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM media").get().n, 0);
@@ -98,7 +105,7 @@ test("photos that fail to be saved for a message stay in the draft, and nothing 
   try {
     await controller.chooseModel("vision");
     const draft = controller.state.getState().draft;
-    await draft.addPhotos([photo]);
+    await draft.addPhotos([MOCK_JPEG_PHOTO]);
     draft.edit("keep me");
     await draft.flush();
     const photos = await draft.readPhotos();
@@ -162,13 +169,13 @@ test("image-only messages are sent and photos share the bounded media budget", a
 });
 
 test("photo validation rejects excessive counts, bytes and invalid metadata", () => {
-  validatePhotos([photo]);
+  validatePhotos([MOCK_JPEG_PHOTO]);
   for (const input of [
     [],
-    Array(5).fill(photo),
-    [{ ...photo, width: 0 }],
-    [{ ...photo, data: "bad!" }],
-    [{ ...photo, data: "a".repeat(12 * 1024 * 1024) }],
+    Array(5).fill(MOCK_JPEG_PHOTO),
+    [{ ...MOCK_JPEG_PHOTO, width: 0 }],
+    [{ ...MOCK_JPEG_PHOTO, data: "bad!" }],
+    [{ ...MOCK_JPEG_PHOTO, data: "a".repeat(12 * 1024 * 1024) }],
   ]) {
     assert.throws(() => validatePhotos(input));
   }
@@ -202,8 +209,11 @@ test("photo sends a model can't take are refused with the draft kept; once photo
     await controller.chooseModel("text");
     const draft = controller.state.getState().draft;
     draft.edit("draft");
-    await draft.addPhotos([photo]);
-    assert.equal(await controller.send("caption", [photo]), "refused");
+    await draft.addPhotos([MOCK_JPEG_PHOTO]);
+    assert.equal(
+      await controller.send("caption", [MOCK_JPEG_PHOTO]),
+      "refused",
+    );
     assert.equal(controller.state.getState().error, "No image support");
     assert.deepEqual(openChat(controller).log, []);
     assert.equal(draft.value.text, "draft");
@@ -227,7 +237,7 @@ test("a photo message's retry keeps its photos, and is refused on a model that c
   const { store, sqlite, controller, requests } = await setup();
   try {
     await controller.chooseModel("vision");
-    await controller.state.getState().draft.addPhotos([photo]);
+    await controller.state.getState().draft.addPhotos([MOCK_JPEG_PHOTO]);
     await sendWithPhotos(controller, "caption");
     await tick();
     requests[0].fail(new Error("offline"));
@@ -239,7 +249,9 @@ test("a photo message's retry keeps its photos, and is refused on a model that c
     await controller.chooseModel("vision");
     assert.equal(controller.command({ kind: "retry" }), null);
     await tick();
-    assert.deepEqual(requests[1].messages[0].photos, [{ data: photo.data }]);
+    assert.deepEqual(requests[1].messages[0].photos, [
+      { data: MOCK_JPEG_PHOTO.data },
+    ]);
     assert.equal((await readLatest(store)).log.length, 1);
   } finally {
     await controller.dispose();
@@ -257,7 +269,9 @@ test("photo drafts survive reopening, stay with their chat, and go with it", asy
     await connection.store.initialize();
     const { id } = await connection.store.readNewChat();
     await connection.store.saveDraft(id, "caption");
-    const metadata = await connection.store.addPhotoDraft(id, [photo]);
+    const metadata = await connection.store.addPhotoDraft(id, [
+      MOCK_JPEG_PHOTO,
+    ]);
     assert.equal(metadata[0].data, undefined);
     connection.sqlite.close();
     connection = connect(join(dir, "drafts.db"));
@@ -268,7 +282,7 @@ test("photo drafts survive reopening, stay with their chat, and go with it", asy
       selectedModel: null,
       draft: { text: "caption", photos: metadata },
     });
-    assert.deepEqual(await store.readPhotoDraftData(id), [photo]);
+    assert.deepEqual(await store.readPhotoDraftData(id), [MOCK_JPEG_PHOTO]);
     // A voice message saves the chat and leaves its draft with it.
     const key = await store.addRecording(id, "UklGRg==");
     await store.writeLog(
@@ -293,17 +307,20 @@ test("photo drafts survive reopening, stay with their chat, and go with it", asy
       "vision",
       1,
     );
-    assert.deepEqual(await store.readPhotoDraftData(id), [photo]);
+    assert.deepEqual(await store.readPhotoDraftData(id), [MOCK_JPEG_PHOTO]);
     // The next new chat starts empty and keeps its own photos.
     const fresh = (await store.activateNew()).chat.id;
     assert.notEqual(fresh, id);
     assert.deepEqual(await store.readPhotoDraftData(fresh), []);
-    await store.addPhotoDraft(fresh, [{ ...photo, width: 200 }]);
+    await store.addPhotoDraft(fresh, [{ ...MOCK_JPEG_PHOTO, width: 200 }]);
     assert.equal((await store.readPhotoDraft(fresh))[0].width, 200);
     assert.equal((await store.readPhotoDraft(id))[0].width, 100);
     await store.remove(id);
     assert.equal((await store.readPhotoDraft(id)).length, 0);
-    await assert.rejects(store.addPhotoDraft(id, [photo]), /no longer exists/);
+    await assert.rejects(
+      store.addPhotoDraft(id, [MOCK_JPEG_PHOTO]),
+      /no longer exists/,
+    );
   } finally {
     connection.sqlite.close();
     await rm(dir, { recursive: true, force: true });
@@ -316,18 +333,18 @@ test("draft photo add/remove and staging roll back without losing attachments", 
     await store.initialize();
     const { id } = await store.readNewChat();
     failRead();
-    await assert.rejects(store.addPhotoDraft(id, [photo]));
+    await assert.rejects(store.addPhotoDraft(id, [MOCK_JPEG_PHOTO]));
     assert.equal((await store.readPhotoDraft(id)).length, 0);
-    const [saved] = await store.addPhotoDraft(id, [photo]);
+    const [saved] = await store.addPhotoDraft(id, [MOCK_JPEG_PHOTO]);
     failRead();
     await assert.rejects(store.removePhotoDraft(id, saved.id));
     assert.equal((await store.readPhotoDraft(id)).length, 1);
     failRead();
     await assert.rejects(store.stagePhotoDraft(id));
-    assert.deepEqual(await store.readPhotoDraftData(id), [photo]);
+    assert.deepEqual(await store.readPhotoDraftData(id), [MOCK_JPEG_PHOTO]);
     assert.deepEqual(
       await store.readPhoto({ id: saved.id, draft: true }),
-      photo,
+      MOCK_JPEG_PHOTO,
     );
     await store.removePhotoDraft(id, saved.id);
     assert.equal((await store.readPhotoDraft(id)).length, 0);
@@ -342,7 +359,7 @@ test("the workspace restores a photo draft on chat switch without publishing on 
     await controller.chooseModel("vision");
     const snapshot = controller.state.getState(),
       draft = snapshot.draft;
-    await draft.addPhotos([photo]);
+    await draft.addPhotos([MOCK_JPEG_PHOTO]);
     assert.equal(controller.state.getState(), snapshot);
     assert.equal(draft.getPhotos().length, 1);
     await controller.select(null);
@@ -366,7 +383,7 @@ test("a discarded message goes back to an empty draft with its photos; what was 
   try {
     await controller.chooseModel("vision");
     const draft = controller.state.getState().draft;
-    await draft.addPhotos([photo]);
+    await draft.addPhotos([MOCK_JPEG_PHOTO]);
     draft.edit("caption");
     assert.equal(await sendWithPhotos(controller, "caption"), "saved");
     await tick();

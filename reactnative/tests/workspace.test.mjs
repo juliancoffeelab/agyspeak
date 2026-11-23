@@ -514,7 +514,7 @@ test("a reply without spaces between words, or with a very long word, is still s
   }
 });
 
-const PHOTO = { data: "/9j/", thumbnail: "/9j/", width: 100, height: 80 };
+const MOCK_PHOTO = { data: "/9j/", thumbnail: "/9j/", width: 100, height: 80 };
 const count = (sqlite, table) =>
   sqlite.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n;
 const draftText = (sqlite) =>
@@ -542,7 +542,7 @@ test("a message whose write fails stays the draft until a write takes it, and wh
   };
   try {
     const draft = workspace.state.getState().draft;
-    await draft.addPhotos([PHOTO]);
+    await draft.addPhotos([MOCK_PHOTO]);
     draft.edit("Keep me");
     let result = null;
     const sending = submit(workspace, true);
@@ -586,7 +586,7 @@ test("the write of a message takes it from the draft in the same transaction", a
   };
   try {
     const draft = workspace.state.getState().draft;
-    await draft.addPhotos([PHOTO]);
+    await draft.addPhotos([MOCK_PHOTO]);
     draft.edit("Hello");
     await draft.flush();
     assert.equal(
